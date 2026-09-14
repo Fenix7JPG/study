@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Dump + Repaso Espaciado</title>
+    <style>
+      body { font-family: system-ui, sans-serif; margin: 2rem auto; max-width: 60rem; padding: 0 1rem; color: #1c1c1c; }
+      nav { display: flex; gap: 1rem; align-items: center; border-bottom: 2px solid #ddd; padding-bottom: .5rem; margin-bottom: 1rem; flex-wrap: wrap; }
+      nav .usuario { margin-left: auto; color: #555; }
+      label { display: block; margin: .6rem 0; }
+      fieldset { margin: .8rem 0; }
+      button { padding: .45rem 1rem; cursor: pointer; }
+      table { border-collapse: collapse; width: 100%; }
+      th, td { border: 1px solid #ccc; padding: .4rem .6rem; text-align: left; }
+      .error { color: #b00020; }
+      .codigo code { font-size: 1.4rem; letter-spacing: .2em; background: #f0f0f0; padding: .3rem .6rem; }
+      textarea { width: 100%; font-family: ui-monospace, monospace; }
+    </style>
+  </head>
+  <body>
+    <!-- Punto de entrada del frontend; las vistas se implementan en las tareas de interfaz -->
+    <div id="app"></div>
+    <script type="module" src="/main.ts"></script>
+  </body>
+</html>

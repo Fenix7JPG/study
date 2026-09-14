@@ -1,0 +1,27 @@
+# Dependencias
+node_modules/
+
+# Compilados
+dist/
+build/
+
+# Variables de entorno — NUNCA versionar el .env real (fuente §12)
+.env
+.env.local
+.env.*.local
+
+# Logs y temporales
+*.log
+*.tmp
+tmp/
+.tmp-tests/
+
+# Sistema
+.DS_Store
+Thumbs.db
+
+.hermes
+.specify/
+.specs/
+.AGENTES.md
+skills
