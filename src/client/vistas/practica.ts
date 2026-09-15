@@ -96,17 +96,60 @@ export function renderPractica(contenedor: HTMLElement, salaId: string): void {
                 .join('') +
               '</ol>'
             : ''
+        detenerRankingEnVivo()
         zona.innerHTML = [
           '<h2>Sesión completada</h2>',
           '<p>Puntaje total: <strong>' + String(datos.puntos_obtenidos_total) + '</strong> (' + String(datos.respondidas) + ' preguntas)</p>',
           '<ul>' + detalle + '</ul>',
           ranking,
-          '<p><a href="#/perfil">Descargar mis fichas (.apkg)</a> · <a href="#/sala/' + salaId + '">Volver a la sala</a></p>'
+          '<p><button id="descargar-banco">Descargar banco personalizado (.zip)</button> · <a href="#/perfil">Exportar a Anki (.apkg)</a> · <a href="#/sala/' + salaId + '">Volver a la sala</a></p>'
         ].join('')
+        document.getElementById('descargar-banco')?.addEventListener('click', function () {
+          const token = localStorage.getItem('token_sesion') ?? ''
+          fetch('/api/export/banco/todas', { headers: { Authorization: 'Bearer ' + token } })
+            .then(function (r) { return r.blob() })
+            .then(function (blob) {
+              const url = URL.createObjectURL(blob)
+              const enlace = document.createElement('a')
+              enlace.href = url
+              enlace.download = 'banco-personalizado.zip'
+              enlace.click()
+              URL.revokeObjectURL(url)
+            })
+        })
       })
       .catch(function (e: Error) {
         zona.innerHTML = '<p class="error">' + escapar(e.message) + '</p>'
       })
+  }
+
+  // Ranking EN VIVO (FR-116): consulta el ranking cada 10 s durante la sesión
+  let temporizadorRanking: number | undefined
+  function iniciarRankingEnVivo(): void {
+    const zonaRanking = document.getElementById('zona-ranking')
+    if (!zonaRanking) return
+    temporizadorRanking = setInterval(function () {
+      fetch('/api/salas/' + salaId + '/ranking', { headers: { Authorization: 'Bearer ' + (localStorage.getItem('token_sesion') ?? '') } })
+        .then(function (r) { return r.json() })
+        .then(function (datos: { ranking: Array<{ nombre: string; puntosSesion: number; ganador: boolean }> | null }) {
+          if (!zonaRanking) return
+          if (datos.ranking === null) {
+            zonaRanking.innerHTML = '<p class="ranking-vivo">Ranking: aún sin participantes recientes.</p>'
+            return
+          }
+          zonaRanking.innerHTML = '<p class="ranking-vivo"><strong>Ranking en vivo:</strong> ' +
+            datos.ranking.map(function (f) {
+              return escapar(f.nombre) + ' ' + String(f.puntosSesion) + (f.ganador ? ' 🏆' : '')
+            }).join(' · ') + '</p>'
+        })
+        .catch(function () { /* silencio: el siguiente tick reintenta */ })
+    }, 10000) as unknown as number
+  }
+  function detenerRankingEnVivo(): void {
+    if (temporizadorRanking !== undefined) {
+      clearInterval(temporizadorRanking)
+      temporizadorRanking = undefined
+    }
   }
 
   forma.addEventListener('submit', function (evento) {
@@ -118,6 +161,9 @@ export function renderPractica(contenedor: HTMLElement, salaId: string): void {
     }
     apiFetch<{ sesion: { id: string }; total: number }>('/api/practica/iniciar', { method: 'POST', body: JSON.stringify(cuerpo) })
       .then(function (inicio) {
+        const zona = document.getElementById('zona') as HTMLElement
+        zona.innerHTML += '<div id="zona-ranking"></div>'
+        iniciarRankingEnVivo()
         responderYPreguntar(inicio.sesion.id, 0, inicio.total)
       })
       .catch(function (e: Error) {

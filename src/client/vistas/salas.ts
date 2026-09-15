@@ -84,14 +84,20 @@ export function renderCrearSala(contenedor: HTMLElement, irASalas: () => void): 
     '</ol>',
     '</div>',
     '<form id="forma-crear">',
+    '<fieldset><legend>Modo de la sala</legend>',
+    '<label><input type="radio" name="modo" value="dump" checked /> Dump (con documento; crea el banco)</label>',
+    '<label><input type="radio" name="modo" value="multijugador" /> Anki multijugador (cada quien importa su banco)</label>',
+    '</fieldset>',
+    '<div id="zona-dump">',
     '<label>Archivo JSON de ingesta (opcional) <input type="file" id="cargar-json" accept=".json,.txt,.md" /></label>',
     '<label>…o pega el JSON aquí<br /><textarea name="json" rows="10" cols="70" placeholder="{ &quot;documento&quot;: { … } }"></textarea></label>',
     '<fieldset><legend>Configuración opcional (vacío = calcular por sección)</legend>',
     '<label>Tiempo de lectura (min) <input type="number" name="lectura" min="1" /></label>',
     '<label>Tiempo de escritura (min) <input type="number" name="escritura" min="1" /></label>',
     '<label>Tiempo de resultados (min) <input type="number" name="resultados" min="1" /></label>',
-    '<label>Tamaño de sesión de práctica <input type="number" name="tamano" min="1" value="30" /></label>',
     '</fieldset>',
+    '</div>',
+    '<label>Tamaño de sesión de práctica <input type="number" name="tamano" min="1" value="30" /></label>',
     '<button type="submit">Crear sala</button>',
     '<p class="error" id="error-crear" hidden></p>',
     '</form>',
@@ -102,6 +108,17 @@ export function renderCrearSala(contenedor: HTMLElement, irASalas: () => void): 
   const error = document.getElementById('error-crear') as HTMLElement
   const resultado = document.getElementById('resultado-crear') as HTMLElement
   const areaJson = forma.querySelector('textarea') as HTMLTextAreaElement
+
+  function alternarModo(): void {
+    const multijugador = (forma.querySelector('input[name="modo"]:checked') as HTMLInputElement).value === 'multijugador'
+    const zona = document.getElementById('zona-dump') as HTMLElement
+    zona.style.display = multijugador ? 'none' : 'block'
+    areaJson.required = !multijugador
+  }
+  forma.querySelectorAll('input[name="modo"]').forEach(function (radio) {
+    radio.addEventListener('change', alternarModo)
+  })
+  alternarModo()
 
   // Cargar el archivo JSON y volcarlo (limpio) al cuadro de texto
   document.getElementById('cargar-json')?.addEventListener('change', function (evento) {
@@ -119,26 +136,35 @@ export function renderCrearSala(contenedor: HTMLElement, irASalas: () => void): 
     error.hidden = true
     const datos = new FormData(forma)
 
-    // Limpieza tolerante + chequeo local de que sea JSON parseable; la
-    // validación ESTRICTA del esquema la hace el backend (FR-007)
-    let jsonIngesta: unknown
-    try {
-      jsonIngesta = JSON.parse(limpiarRespuestaIA(String(datos.get('json'))))
-    } catch {
-      error.hidden = false
-      error.textContent = 'El contenido no es JSON válido. Debe ser la respuesta JSON del prompt maestro de ingesta (no el documento Word).'
-      return
+    // Limpieza tolerante + chequeo local de que sea JSON parseable (solo
+    // modo dump); la validación ESTRICTA del esquema la hace el backend
+    let jsonIngesta: unknown = undefined
+    if (String(datos.get('modo')) !== 'multijugador') {
+      try {
+        jsonIngesta = JSON.parse(limpiarRespuestaIA(String(datos.get('json'))))
+      } catch {
+        error.hidden = false
+        error.textContent = 'El contenido no es JSON válido. Debe ser la respuesta JSON del prompt maestro de ingesta (no el documento Word).'
+        return
+      }
     }
 
-    const cuerpo: Record<string, unknown> = { json_ingesta: jsonIngesta }
-    const lectura = String(datos.get('lectura'))
-    const escritura = String(datos.get('escritura'))
-    const resultados = String(datos.get('resultados'))
+    const cuerpo: Record<string, unknown> = {}
     const tamano = String(datos.get('tamano'))
-    if (lectura !== '') cuerpo.config_tiempo_lectura = Number(lectura)
-    if (escritura !== '') cuerpo.config_tiempo_escritura = Number(escritura)
-    if (resultados !== '') cuerpo.config_tiempo_resultados = Number(resultados)
     if (tamano !== '') cuerpo.config_tamano_sesion_practica = Number(tamano)
+
+    if (String(datos.get('modo')) === 'multijugador') {
+      cuerpo.modo = 'multijugador'
+    } else {
+      cuerpo.modo = 'dump'
+      cuerpo.json_ingesta = jsonIngesta
+      const lectura = String(datos.get('lectura'))
+      const escritura = String(datos.get('escritura'))
+      const resultados = String(datos.get('resultados'))
+      if (lectura !== '') cuerpo.config_tiempo_lectura = Number(lectura)
+      if (escritura !== '') cuerpo.config_tiempo_escritura = Number(escritura)
+      if (resultados !== '') cuerpo.config_tiempo_resultados = Number(resultados)
+    }
 
     apiFetch<RespuestaCrearSala>('/api/salas', { method: 'POST', body: JSON.stringify(cuerpo) })
       .then(function (respuesta) {

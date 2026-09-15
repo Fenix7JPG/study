@@ -4,8 +4,8 @@ import { apiFetch, escapar } from '../main'
 // ranking y (si es admin) formulario de configuración (fuente §6.2).
 
 interface SalaDetalle {
-  sala: { id: string; codigoInvitacion: string; configTiempoLectura: number | null; configTiempoEscritura: number | null; configTiempoResultados: number | null; configTamanoSesionPractica: number }
-  documentoTitulo: string
+  sala: { id: string; codigoInvitacion: string; modo: 'dump' | 'multijugador'; cerradaEn: string | null; configTiempoLectura: number | null; configTiempoEscritura: number | null; configTiempoResultados: number | null; configTamanoSesionPractica: number }
+  documentoTitulo: string | null
   secciones: Array<{ id: string; titulo: string; orden: number; num_palabras: number }>
   rol: 'administrador' | 'participante'
 }
@@ -15,6 +15,7 @@ export function renderSala(contenedor: HTMLElement, salaId: string): void {
 
   apiFetch<SalaDetalle>('/api/salas/' + salaId)
     .then(function (detalle) {
+      const esMultijugador = detalle.sala.modo === 'multijugador'
       const filas = detalle.secciones
         .map(function (s) {
           return [
@@ -28,7 +29,7 @@ export function renderSala(contenedor: HTMLElement, salaId: string): void {
         .join('')
 
       const config =
-        detalle.rol === 'administrador'
+        detalle.rol === 'administrador' && !esMultijugador
           ? [
               '<h2>Configuración (administrador)</h2>',
               '<form id="forma-config">',
@@ -42,13 +43,81 @@ export function renderSala(contenedor: HTMLElement, salaId: string): void {
             ].join('')
           : ''
 
+      const titulo = detalle.documentoTitulo ?? 'Sala multijugador'
+      const zonaMultijugador = esMultijugador
+        ? [
+            '<h2>Mi banco de fichas</h2>',
+            '<p>Importa tu banco personalizado (.json o .zip del formato del sistema):</p>',
+            '<form id="forma-importar">',
+            '<label>Archivos <input type="file" id="archivos-banco" multiple accept=".json,.zip,.txt" /></label>',
+            '<button type="submit">Importar banco</button>',
+            '<p class="error" id="error-importar" hidden></p>',
+            '</form>',
+            '<div id="resultado-importar"></div>'
+          ].join('')
+        : ''
+
+      const cierreHost = esMultijugador && detalle.rol === 'administrador'
+        ? (detalle.sala.cerradaEn === null
+            ? '<button id="cerrar-sala">Cerrar sala (congelar ranking y señalar ganador)</button>'
+            : '<p>Sala cerrada el ' + escapar(detalle.sala.cerradaEn.slice(0, 10)) + '.</p>')
+        : ''
+
       contenedor.innerHTML = [
-        '<h1>' + escapar(detalle.documentoTitulo) + '</h1>',
-        '<p>Código de invitación: <code>' + escapar(detalle.sala.codigoInvitacion) + '</code> · Rol: ' + escapar(detalle.rol) + '</p>',
+        '<h1>' + escapar(titulo) + '</h1>',
+        '<p>' + (esMultijugador ? 'Modo: <strong>Anki multijugador</strong>' : 'Modo: dump') + ' · Código de invitación: <code>' + escapar(detalle.sala.codigoInvitacion) + '</code> · Rol: ' + escapar(detalle.rol) + '</p>',
         '<p><a href="#/practica/' + salaId + '">Iniciar sesión de práctica</a> · <a href="#/ranking/' + salaId + '">Ver ranking</a></p>',
-        '<table><thead><tr><th>Sección</th><th>Extensión</th><th>Acción</th></tr></thead><tbody>' + filas + '</tbody></table>',
+        esMultijugador ? zonaMultijugador : '<table><thead><tr><th>Sección</th><th>Extensión</th><th>Acción</th></tr></thead><tbody>' + filas + '</tbody></table>',
+        cierreHost,
         config
       ].join('')
+
+      if (esMultijugador) {
+        const formaImportar = document.getElementById('forma-importar') as HTMLFormElement
+        const errorImportar = document.getElementById('error-importar') as HTMLElement
+        formaImportar.addEventListener('submit', function (evento) {
+          evento.preventDefault()
+          const entrada = document.getElementById('archivos-banco') as HTMLInputElement
+          if (entrada.files === null || entrada.files.length === 0) {
+            errorImportar.hidden = false
+            errorImportar.textContent = 'Selecciona al menos un archivo .json o .zip'
+            return
+          }
+          const datos = new FormData()
+          for (const archivo of entrada.files) {
+            datos.append('archivos', archivo)
+          }
+          fetch('/api/import/banco', { method: 'POST', headers: { Authorization: 'Bearer ' + (localStorage.getItem('token_sesion') ?? '') }, body: datos })
+            .then(function (r) { return r.json() })
+            .then(function (respuesta) {
+              const contenedorResultado = document.getElementById('resultado-importar') as HTMLElement
+              const lineas = (respuesta.resultados as Array<{ archivo: string; creadas: number; actualizadas: number; rechazadas: Array<{ indice_ficha: number; campo: string; motivo: string }> }>)
+                .map(function (r) {
+                  return '<li><strong>' + escapar(r.archivo) + '</strong>: ' + String(r.creadas) + ' creadas, ' + String(r.actualizadas) + ' actualizadas' +
+                    (r.rechazadas.length > 0 ? ' — RECHAZADAS: ' + r.rechazadas.map(function (x) { return escapar(x.campo + ': ' + x.motivo) }).join('; ') : '') + '</li>'
+                })
+                .join('')
+              contenedorResultado.innerHTML = '<ul>' + lineas + '</ul>'
+            })
+            .catch(function (e: Error) {
+              errorImportar.hidden = false
+              errorImportar.textContent = e.message
+            })
+        })
+      }
+
+      const botonCerrar = document.getElementById('cerrar-sala')
+      if (botonCerrar) {
+        botonCerrar.addEventListener('click', function () {
+          apiFetch('/api/salas/' + salaId + '/cerrar', { method: 'PATCH' })
+            .then(function () {
+              renderSala(contenedor, salaId)
+            })
+            .catch(function (e: Error) {
+              window.alert(e.message)
+            })
+        })
+      }
 
       if (detalle.rol === 'administrador') {
         const forma = document.getElementById('forma-config') as HTMLFormElement

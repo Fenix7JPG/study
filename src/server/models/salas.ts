@@ -6,7 +6,7 @@ import type { Client } from '../../db/client.js'
 
 export interface Sala {
   id: string
-  documentoId: string
+  documentoId: string | null
   codigoInvitacion: string
   administradorCuentaId: string
   configTiempoLectura: number | null
@@ -14,11 +14,14 @@ export interface Sala {
   configTiempoResultados: number | null
   configTamanoSesionPractica: number
   configValoresPuntuacion: string
+  modo: 'dump' | 'multijugador'
+  cerradaEn: string | null
 }
 
 export interface DatosSalaNueva {
-  documentoId: string
+  documentoId: string | null
   administradorCuentaId: string
+  modo: 'dump' | 'multijugador'
   codigoInvitacion: string
   configTiempoLectura: number | null
   configTiempoEscritura: number | null
@@ -42,19 +45,21 @@ export function generarCodigoInvitacion(): string {
 // Columnas del SELECT: id, documento_id, codigo_invitacion, administrador_cuenta_id,
 // config_tiempo_lectura, config_tiempo_escritura, config_tiempo_resultados,
 // config_tamano_sesion_practica, config_valores_puntuacion
-const SELECT_SALA = 'SELECT id, documento_id, codigo_invitacion, administrador_cuenta_id, config_tiempo_lectura, config_tiempo_escritura, config_tiempo_resultados, config_tamano_sesion_practica, config_valores_puntuacion FROM Sala'
+const SELECT_SALA = 'SELECT id, documento_id, codigo_invitacion, administrador_cuenta_id, config_tiempo_lectura, config_tiempo_escritura, config_tiempo_resultados, config_tamano_sesion_practica, config_valores_puntuacion, modo, cerrada_en FROM Sala'
 
 function mapearSala(fila: ArrayLike<unknown>): Sala {
   return {
     id: fila[0] as string,
-    documentoId: fila[1] as string,
+    documentoId: (fila[1] as string | null) ?? null,
     codigoInvitacion: fila[2] as string,
     administradorCuentaId: fila[3] as string,
     configTiempoLectura: (fila[4] as number | null) ?? null,
     configTiempoEscritura: (fila[5] as number | null) ?? null,
     configTiempoResultados: (fila[6] as number | null) ?? null,
     configTamanoSesionPractica: fila[7] as number,
-    configValoresPuntuacion: fila[8] as string
+    configValoresPuntuacion: fila[8] as string,
+    modo: (fila[9] as 'dump' | 'multijugador' | null) ?? 'dump',
+    cerradaEn: (fila[10] as string | null) ?? null
   }
 }
 
@@ -64,8 +69,8 @@ export async function crearSala(db: Client, datos: DatosSalaNueva): Promise<Sala
     sql: [
       'INSERT INTO Sala (id, documento_id, codigo_invitacion, administrador_cuenta_id,',
       'config_tiempo_lectura, config_tiempo_escritura, config_tiempo_resultados,',
-      'config_tamano_sesion_practica, config_valores_puntuacion)',
-      'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
+      'config_tamano_sesion_practica, config_valores_puntuacion, modo)',
+      'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
     ].join(' '),
     args: [
       id,
@@ -76,7 +81,8 @@ export async function crearSala(db: Client, datos: DatosSalaNueva): Promise<Sala
       datos.configTiempoEscritura,
       datos.configTiempoResultados,
       datos.configTamanoSesionPractica,
-      datos.configValoresPuntuacion
+      datos.configValoresPuntuacion,
+      datos.modo
     ]
   })
   const sala = await obtenerSala(db, id)
@@ -124,31 +130,32 @@ export async function buscarSalaPorDocumento(db: Client, documentoId: string): P
 export async function listarSalasDeCuenta(
   db: Client,
   cuentaId: string
-): Promise<Array<{ sala: Sala; documentoTitulo: string; rol: 'administrador' | 'participante' }>> {
+): Promise<Array<{ sala: Sala; documentoTitulo: string | null; rol: 'administrador' | 'participante' }>> {
   const resultado = await db.execute({
     sql: [
       'SELECT ' +
         's.id, s.documento_id, s.codigo_invitacion, s.administrador_cuenta_id,',
       's.config_tiempo_lectura, s.config_tiempo_escritura, s.config_tiempo_resultados,',
-      's.config_tamano_sesion_practica, s.config_valores_puntuacion,',
+      's.config_tamano_sesion_practica, s.config_valores_puntuacion, s.modo, s.cerrada_en,',
       'd.titulo, s.administrador_cuenta_id = m.cuenta_id AS es_admin',
       'FROM Membresia m',
       'JOIN Sala s ON s.id = m.sala_id',
-      'JOIN Documento d ON d.id = s.documento_id',
+      'LEFT JOIN Documento d ON d.id = s.documento_id',
       'WHERE m.cuenta_id = ?',
       'ORDER BY m.fecha_union DESC'
     ].join(' '),
     args: [cuentaId]
   })
 
-  const salida: Array<{ sala: Sala; documentoTitulo: string; rol: 'administrador' | 'participante' }> = []
+  const salida: Array<{ sala: Sala; documentoTitulo: string | null; rol: 'administrador' | 'participante' }> = []
   for (const fila of resultado.rows) {
-    // La consulta trae 9 columnas de Sala + titulo del documento + es_admin
+    // La consulta trae 11 columnas de Sala + titulo del documento (NULL en
+    // multijugador, d es CROSS-less JOIN: usamos LEFT JOIN implícito via COALESCE)
     const valores = Array.from(fila)
     salida.push({
-      sala: mapearSala(valores.slice(0, 9)),
-      documentoTitulo: valores[9] as string,
-      rol: (valores[10] as number) === 1 ? 'administrador' : 'participante'
+      sala: mapearSala(valores.slice(0, 11)),
+      documentoTitulo: (valores[11] as string | null) ?? null,
+      rol: (valores[12] as number) === 1 ? 'administrador' : 'participante'
     })
   }
   return salida
@@ -221,4 +228,13 @@ export async function esAdministrador(db: Client, cuentaId: string, salaId: stri
     args: [salaId, cuentaId]
   })
   return resultado.rows.length > 0
+}
+
+
+// Cierre explícito de la sala por parte del host (FR-117)
+export async function cerrarSala(db: Client, salaId: string): Promise<void> {
+  await db.execute({
+    sql: 'UPDATE Sala SET cerrada_en = ? WHERE id = ?',
+    args: [new Date().toISOString(), salaId]
+  })
 }

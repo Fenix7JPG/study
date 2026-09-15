@@ -24,6 +24,8 @@ function ficha(id: string, datos: Partial<Ficha>): Ficha {
     intervaloDias: 0,
     factorFacilidad: 2.5,
     fechaProximoRepaso: PASADO,
+    conceptoTipo: null,
+    fichaExternaId: null,
     ...datos
   }
 }

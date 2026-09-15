@@ -9,6 +9,7 @@ import { crearRouterSecciones } from './api/secciones.js'
 import { crearRouterPractica } from './api/practica.js'
 import { crearRouterExport } from './api/export.js'
 import { crearRouterRanking } from './api/ranking.js'
+import { crearRouterImport } from './api/import.js'
 import { crearClienteOpenRouter, type ClienteIA } from './ai/openrouter.js'
 
 // Fábrica de la aplicación Express (inyectable para pruebas).
@@ -53,8 +54,11 @@ export function crearApp(deps: DependenciasApp): Express {
   // Ranking POR SESIÓN
   app.use('/api/salas', crearRouterRanking(deps.db, deps.env.jwtSecret))
 
-  // Exportación .apkg
+  // Exportación .apkg y banco portable
   app.use('/api/export', crearRouterExport(deps.db, deps.env.jwtSecret))
+
+  // Importación de bancos (feature 002)
+  app.use('/api/import', crearRouterImport(deps.db, deps.env.jwtSecret))
 
   // Interfaz: estáticos compilados por Vite (dist/client en producción,
   // src/client con tsx en desarrollo). El router del cliente usa hashes,

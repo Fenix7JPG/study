@@ -2,7 +2,7 @@ import { Router } from 'express'
 import type { Client } from '../../db/client.js'
 import { crearMiddlewareAuth } from './middleware/auth.js'
 import { obtenerSala, esMiembro } from '../models/salas.js'
-import { calcularRanking, conGanador } from '../services/ranking.js'
+import { calcularRankingDeSala } from '../services/ranking.js'
 
 // Ranking POR SESIÓN de la sala (fuente §6.8/§8.3, FR-034/035/036):
 // solo se muestra si hay más de un participante con sesión activa o reciente
@@ -19,9 +19,10 @@ export function crearRouterRanking(db: Client, jwtSecret: string): Router {
       res.status(403).json({ error: 'sala no encontrada o sin acceso' })
       return
     }
-    const filas = await calcularRanking(db, sala.id, new Date())
+    const resultado = await calcularRankingDeSala(db, sala.id)
     res.status(200).json({
-      ranking: filas.length > 1 ? conGanador(filas) : null
+      ranking: resultado.ranking,
+      salaCerrada: resultado.salaCerrada
     })
   })
 

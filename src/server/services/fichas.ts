@@ -53,18 +53,37 @@ export async function generarBancoFichas(
 
   const respuesta = await clienteIA.llamar(ESQUEMA_GENERACION_FICHAS, PROMPT_GENERACION_FICHAS, entrada)
 
-  // Conceptos que SIGUEN fallando tras la Ronda 2 → pendiente = true (§6.3)
-  const falladosRonda2 = listarConceptosFalladosDeRonda(ronda2)
+  // Pendiente de nacimiento (regla v2, FR-119): concepto en faltantes o
+  // errores COMBINADOS de las rondas 1 y 2 (research D20)
+  const falladosCombinados = new Set<string>()
+  if (ronda1 !== null) {
+    for (const id of listarConceptosFalladosDeRonda(ronda1)) falladosCombinados.add(id)
+  }
+  for (const id of listarConceptosFalladosDeRonda(ronda2)) falladosCombinados.add(id)
+
+  // Tipo del concepto del mapa original (para el banco portable §8)
+  const tiposPorId = new Map<string, string>()
+  try {
+    const mapa = JSON.parse(seccion.mapaConceptos) as Array<{ id?: string; tipo?: string }>
+    for (const concepto of mapa) {
+      if (typeof concepto.id === 'string' && typeof concepto.tipo === 'string') {
+        tiposPorId.set(concepto.id, concepto.tipo)
+      }
+    }
+  } catch {
+    // mapa corrupto: concepto_tipo queda null
+  }
 
   let creadas = 0
   for (const ficha of respuesta.fichas) {
-    const pendiente = falladosRonda2.has(ficha.concepto_id)
+    const pendiente = falladosCombinados.has(ficha.concepto_id)
     await crearFicha(db, {
       cuentaId: cuentaId,
       seccionId: seccionId,
       pregunta: ficha.pregunta,
       respuesta: ficha.respuesta,
       conceptoId: ficha.concepto_id,
+      conceptoTipo: tiposPorId.get(ficha.concepto_id) ?? null,
       tipo: ficha.tipo,
       prioridadInicial: ficha.prioridad_inicial,
       pendiente: pendiente

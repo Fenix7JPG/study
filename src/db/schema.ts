@@ -17,7 +17,9 @@ CREATE TABLE IF NOT EXISTS Documento (
   titulo TEXT NOT NULL,
   json_ingesta TEXT NOT NULL,
   fecha_carga TEXT NOT NULL,
-  cuenta_creadora_id TEXT NOT NULL REFERENCES Cuenta(id)
+  cuenta_creadora_id TEXT NOT NULL REFERENCES Cuenta(id),
+  -- 'ingesta' | 'importado' (feature 002; documentos importados: json_ingesta 'null')
+  origen TEXT NOT NULL DEFAULT 'ingesta'
 );
 
 CREATE TABLE IF NOT EXISTS Seccion (
@@ -32,7 +34,7 @@ CREATE TABLE IF NOT EXISTS Seccion (
 
 CREATE TABLE IF NOT EXISTS Sala (
   id TEXT PRIMARY KEY,
-  documento_id TEXT NOT NULL REFERENCES Documento(id),
+  documento_id TEXT REFERENCES Documento(id),
   codigo_invitacion TEXT NOT NULL UNIQUE,
   administrador_cuenta_id TEXT NOT NULL REFERENCES Cuenta(id),
   -- Tiempos: NULL = el admin no fijó valor → se calcula por num_palabras (FR-010)
@@ -40,7 +42,11 @@ CREATE TABLE IF NOT EXISTS Sala (
   config_tiempo_escritura INTEGER CHECK (config_tiempo_escritura IS NULL OR config_tiempo_escritura >= 1),
   config_tiempo_resultados INTEGER CHECK (config_tiempo_resultados IS NULL OR config_tiempo_resultados >= 1),
   config_tamano_sesion_practica INTEGER NOT NULL DEFAULT 30 CHECK (config_tamano_sesion_practica >= 1),
-  config_valores_puntuacion TEXT NOT NULL
+  config_valores_puntuacion TEXT NOT NULL,
+  -- 'dump' | 'multijugador' (feature 002); multijugador: documento_id NULL
+  modo TEXT NOT NULL DEFAULT 'dump',
+  -- cierre explícito del host (feature 002, FR-117); NULL = abierta
+  cerrada_en TEXT
 );
 
 CREATE TABLE IF NOT EXISTS Membresia (
@@ -83,7 +89,10 @@ CREATE TABLE IF NOT EXISTS Ficha (
   repeticiones INTEGER NOT NULL DEFAULT 0,
   intervalo_dias INTEGER NOT NULL DEFAULT 0,
   factor_facilidad REAL NOT NULL DEFAULT 2.5,
-  fecha_proximo_repaso TEXT NOT NULL
+  fecha_proximo_repaso TEXT NOT NULL,
+  -- feature 002: tipo del concepto (para el banco §8) e id del archivo importado
+  concepto_tipo TEXT,
+  ficha_externa_id TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_ficha_cuenta_seccion ON Ficha (cuenta_id, seccion_id);

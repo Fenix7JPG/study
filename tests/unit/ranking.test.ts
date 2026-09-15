@@ -36,6 +36,7 @@ describe('calcularRanking', function () {
     const sala = await crearSala(db, {
       documentoId: documento.id,
       administradorCuentaId: ana.id,
+      modo: 'dump',
       codigoInvitacion: 'CODIGO1',
       configTiempoLectura: 2,
       configTiempoEscritura: 2,

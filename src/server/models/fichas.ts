@@ -19,6 +19,9 @@ export interface Ficha {
   factorFacilidad: number
   // Fecha YYYY-MM-DD (UTC) del próximo repaso
   fechaProximoRepaso: string
+  // feature 002: tipo del concepto (banco §8) e id del archivo importado
+  conceptoTipo: string | null
+  fichaExternaId: string | null
 }
 
 export interface DatosFichaNueva {
@@ -27,6 +30,7 @@ export interface DatosFichaNueva {
   pregunta: string
   respuesta: string
   conceptoId: string
+  conceptoTipo?: string | null
   tipo: 'estandar' | 'discriminacion'
   prioridadInicial: 'alta' | 'baja'
   pendiente: boolean
@@ -36,7 +40,8 @@ export interface DatosFichaNueva {
 // prioridad_inicial, pendiente, repeticiones, intervalo_dias, factor_facilidad, fecha_proximo_repaso
 const SELECT_FICHA = [
   'SELECT id, cuenta_id, seccion_id, pregunta, respuesta, concepto_id, tipo,',
-  'prioridad_inicial, pendiente, repeticiones, intervalo_dias, factor_facilidad, fecha_proximo_repaso',
+  'prioridad_inicial, pendiente, repeticiones, intervalo_dias, factor_facilidad, fecha_proximo_repaso,',
+  'concepto_tipo, ficha_externa_id',
   'FROM Ficha'
 ].join(' ')
 
@@ -54,7 +59,9 @@ function mapearFicha(fila: ArrayLike<unknown>): Ficha {
     repeticiones: fila[9] as number,
     intervaloDias: fila[10] as number,
     factorFacilidad: fila[11] as number,
-    fechaProximoRepaso: fila[12] as string
+    fechaProximoRepaso: fila[12] as string,
+    conceptoTipo: (fila[13] as string | null) ?? null,
+    fichaExternaId: (fila[14] as string | null) ?? null
   }
 }
 
@@ -66,8 +73,8 @@ export async function crearFicha(db: Client, datos: DatosFichaNueva): Promise<Fi
   await db.execute({
     sql: [
       'INSERT INTO Ficha (id, cuenta_id, seccion_id, pregunta, respuesta, concepto_id, tipo,',
-      'prioridad_inicial, pendiente, repeticiones, intervalo_dias, factor_facilidad, fecha_proximo_repaso)',
-      'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 2.5, ?)'
+      'prioridad_inicial, pendiente, repeticiones, intervalo_dias, factor_facilidad, fecha_proximo_repaso, concepto_tipo)',
+      'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 2.5, ?, ?)'
     ].join(' '),
     args: [
       id,
@@ -79,7 +86,8 @@ export async function crearFicha(db: Client, datos: DatosFichaNueva): Promise<Fi
       datos.tipo,
       datos.prioridadInicial,
       datos.pendiente ? 1 : 0,
-      hoy
+      hoy,
+      datos.conceptoTipo ?? null
     ]
   })
   return {
@@ -95,7 +103,9 @@ export async function crearFicha(db: Client, datos: DatosFichaNueva): Promise<Fi
     repeticiones: 0,
     intervaloDias: 0,
     factorFacilidad: 2.5,
-    fechaProximoRepaso: hoy
+    fechaProximoRepaso: hoy,
+    conceptoTipo: datos.conceptoTipo ?? null,
+    fichaExternaId: null
   }
 }
 
@@ -139,7 +149,8 @@ export async function listarFichasDeSala(db: Client, cuentaId: string, salaId: s
   const resultado = await db.execute({
     sql: [
       'SELECT f.id, f.cuenta_id, f.seccion_id, f.pregunta, f.respuesta, f.concepto_id, f.tipo,',
-      'f.prioridad_inicial, f.pendiente, f.repeticiones, f.intervalo_dias, f.factor_facilidad, f.fecha_proximo_repaso',
+      'f.prioridad_inicial, f.pendiente, f.repeticiones, f.intervalo_dias, f.factor_facilidad, f.fecha_proximo_repaso,',
+      'f.concepto_tipo, f.ficha_externa_id',
       'FROM Ficha f',
       'JOIN Seccion s ON s.id = f.seccion_id',
       'JOIN Documento d ON d.id = s.documento_id',
@@ -207,4 +218,110 @@ export async function marcarPendiente(db: Client, fichaId: string, pendiente: bo
     sql: 'UPDATE Ficha SET pendiente = ? WHERE id = ?',
     args: [pendiente ? 1 : 0, fichaId]
   })
+}
+
+// ─── Feature 002: banco portable ──────────────────────────────────────────
+
+// Busca por id externo (regla 1 del upsert, FR-108)
+export async function buscarPorFichaExterna(db: Client, cuentaId: string, fichaExternaId: string): Promise<Ficha | null> {
+  const resultado = await db.execute({
+    sql: SELECT_FICHA + ' WHERE cuenta_id = ? AND ficha_externa_id = ? LIMIT 1',
+    args: [cuentaId, fichaExternaId]
+  })
+  if (resultado.rows.length === 0) {
+    return null
+  }
+  return mapearFicha(resultado.rows[0])
+}
+
+// Busca por id nativo sin ficha_externa_id (regla 2 del upsert)
+export async function buscarPorIdNativo(db: Client, cuentaId: string, id: string): Promise<Ficha | null> {
+  const resultado = await db.execute({
+    sql: SELECT_FICHA + ' WHERE cuenta_id = ? AND id = ? AND ficha_externa_id IS NULL LIMIT 1',
+    args: [cuentaId, id]
+  })
+  if (resultado.rows.length === 0) {
+    return null
+  }
+  return mapearFicha(resultado.rows[0])
+}
+
+// Actualiza todos los campos portables del banco (última importación gana)
+export async function aplicarImportacion(
+  db: Client,
+  fichaId: string,
+  datos: { pregunta: string; respuesta: string; conceptoId: string; conceptoTipo: string | null; tipo: 'estandar' | 'discriminacion'; prioridadInicial: 'alta' | 'baja'; pendiente: boolean; fichaExternaId: string; estadoSm2: { repeticiones: number; intervaloDias: number; factorFacilidad: number; fechaProximoRepaso: string } }
+): Promise<void> {
+  await db.execute({
+    sql: [
+      'UPDATE Ficha SET pregunta = ?, respuesta = ?, concepto_id = ?, concepto_tipo = ?,',
+      'tipo = ?, prioridad_inicial = ?, pendiente = ?, ficha_externa_id = ?,',
+      'repeticiones = ?, intervalo_dias = ?, factor_facilidad = ?, fecha_proximo_repaso = ?',
+      'WHERE id = ?'
+    ].join(' '),
+    args: [
+      datos.pregunta,
+      datos.respuesta,
+      datos.conceptoId,
+      datos.conceptoTipo,
+      datos.tipo,
+      datos.prioridadInicial,
+      datos.pendiente ? 1 : 0,
+      datos.fichaExternaId,
+      datos.estadoSm2.repeticiones,
+      datos.estadoSm2.intervaloDias,
+      datos.estadoSm2.factorFacilidad,
+      datos.estadoSm2.fechaProximoRepaso,
+      fichaId
+    ]
+  })
+}
+
+// TODAS las fichas de la cuenta (pool del Modo 2, FR-113)
+export async function listarFichasDeCuentaTodas(db: Client, cuentaId: string): Promise<Ficha[]> {
+  const resultado = await db.execute({
+    sql: SELECT_FICHA + ' WHERE cuenta_id = ? ORDER BY id ASC',
+    args: [cuentaId]
+  })
+  const salida: Ficha[] = []
+  for (const fila of resultado.rows) {
+    salida.push(mapearFicha(fila))
+  }
+  return salida
+}
+
+// Fichas completas con documento para el banco §8 (FR-101)
+export async function listarFichasExportables(
+  db: Client,
+  cuentaId: string,
+  documentoId: string | null
+): Promise<Array<{ ficha: Ficha; documentoId: string; tituloDocumento: string }>> {
+  const sql = [
+    'SELECT f.id, f.cuenta_id, f.seccion_id, f.pregunta, f.respuesta, f.concepto_id, f.tipo,',
+    'f.prioridad_inicial, f.pendiente, f.repeticiones, f.intervalo_dias, f.factor_facilidad, f.fecha_proximo_repaso,',
+    'f.concepto_tipo, f.ficha_externa_id,',
+    'sec.documento_id, d.titulo',
+    'FROM Ficha f',
+    'JOIN Seccion sec ON sec.id = f.seccion_id',
+    'JOIN Documento d ON d.id = sec.documento_id',
+    'WHERE f.cuenta_id = ?'
+  ]
+  const args: string[] = [cuentaId]
+  if (documentoId !== null) {
+    sql.push('AND sec.documento_id = ?')
+    args.push(documentoId)
+  }
+  sql.push('ORDER BY d.titulo ASC, sec.orden ASC, f.id ASC')
+  const resultado = await db.execute({ sql: sql.join(' '), args: args })
+  const salida: Array<{ ficha: Ficha; documentoId: string; tituloDocumento: string }> = []
+  for (const fila of resultado.rows) {
+    const valores = Array.from(fila)
+    const ficha = mapearFicha(valores.slice(0, 15))
+    salida.push({
+      ficha: ficha,
+      documentoId: valores[15] as string,
+      tituloDocumento: valores[16] as string
+    })
+  }
+  return salida
 }

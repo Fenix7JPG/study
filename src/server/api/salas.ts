@@ -13,7 +13,8 @@ import {
   crearMembresia,
   esMiembro,
   esAdministrador,
-  actualizarConfigSala
+  actualizarConfigSala,
+  cerrarSala
 } from '../models/salas.js'
 
 // Endpoints de salas (fuente §6.1/§6.2, contracts/api.md):
@@ -32,7 +33,51 @@ export function crearRouterSalas(db: Client, jwtSecret: string): Router {
     const cuerpo = req.body ?? {}
     const cuentaId = req.cuentaId as string
 
-    // Validación estricta ANTES de cualquier inserción (nada se persiste si falla)
+    // Modo de la sala (feature 002): 'dump' (default) o 'multijugador'
+    const modo = cuerpo.modo === 'multijugador' ? 'multijugador' : 'dump'
+
+    if (modo === 'multijugador') {
+      // Sin documento ni ingesta (fuente §7.1)
+      if (cuerpo.json_ingesta !== undefined) {
+        res.status(400).json({ error: 'una sala multijugador no lleva JSON de ingesta' })
+        return
+      }
+      const tamano = cuerpo.config_tamano_sesion_practica !== undefined
+        ? enteroPositivo(cuerpo.config_tamano_sesion_practica)
+        : 30
+      if (tamano === 'invalido') {
+        res.status(400).json({ error: 'config_tamano_sesion_practica debe ser un entero ≥ 1' })
+        return
+      }
+      let salaMJ = null
+      for (let intento = 0; intento < 5 && salaMJ === null; intento++) {
+        try {
+          salaMJ = await crearSala(db, {
+            documentoId: null,
+            administradorCuentaId: cuentaId,
+            modo: 'multijugador',
+            codigoInvitacion: generarCodigoInvitacion(),
+            configTiempoLectura: null,
+            configTiempoEscritura: null,
+            configTiempoResultados: null,
+            configTamanoSesionPractica: tamano,
+            configValoresPuntuacion: JSON.stringify(VALORES_DEFECTO)
+          })
+        } catch {
+          // colisión de código: reintenta
+        }
+      }
+      if (salaMJ === null) {
+        res.status(500).json({ error: 'no se pudo generar un código de invitación único' })
+        return
+      }
+      await crearMembresia(db, cuentaId, salaMJ.id)
+      res.status(201).json({ sala: salaMJ })
+      return
+    }
+
+    // Modo dump: exige JSON de ingesta y lo valida estrictamente ANTES de
+    // cualquier inserción (nada se persiste si falla)
     const validacion = validarIngesta(cuerpo.json_ingesta)
     if (!validacion.ok) {
       res.status(400).json({ error: validacion.error })
@@ -87,6 +132,7 @@ export function crearRouterSalas(db: Client, jwtSecret: string): Router {
         sala = await crearSala(db, {
           documentoId: documento.id,
           administradorCuentaId: cuentaId,
+          modo: 'dump',
           codigoInvitacion: generarCodigoInvitacion(),
           configTiempoLectura: lectura,
           configTiempoEscritura: escritura,
@@ -161,6 +207,16 @@ export function crearRouterSalas(db: Client, jwtSecret: string): Router {
       res.status(403).json({ error: 'no eres miembro de esta sala' })
       return
     }
+    if (sala.modo === 'multijugador') {
+      // Sin documento ni secciones: cada quien importa su banco (fuente §7.2)
+      res.status(200).json({
+        sala: sala,
+        documentoTitulo: null,
+        secciones: [],
+        rol: (await esAdministrador(db, cuentaId, sala.id)) ? 'administrador' : 'participante'
+      })
+      return
+    }
     const secciones = await db.execute({
       sql: 'SELECT s.id, s.titulo, s.orden, s.num_palabras, d.titulo FROM Seccion s JOIN Documento d ON d.id = s.documento_id WHERE s.documento_id = ? ORDER BY s.orden ASC',
       args: [sala.documentoId]
@@ -215,6 +271,26 @@ export function crearRouterSalas(db: Client, jwtSecret: string): Router {
       configTiempoResultados: resultados,
       configTamanoSesionPractica: tamano
     })
+    res.status(200).json({ sala: await obtenerSala(db, sala.id) })
+  })
+
+  // ─── PATCH /api/salas/:id/cerrar (solo host, FR-117) ────────────────────
+  router.patch('/:id/cerrar', async function (req, res) {
+    const sala = await obtenerSala(db, req.params.id)
+    if (sala === null) {
+      res.status(404).json({ error: 'sala no encontrada' })
+      return
+    }
+    const cuentaId = req.cuentaId as string
+    if (!(await esAdministrador(db, cuentaId, sala.id))) {
+      res.status(403).json({ error: 'solo el administrador de la sala puede cerrarla' })
+      return
+    }
+    if (sala.cerradaEn !== null) {
+      res.status(409).json({ error: 'la sala ya está cerrada' })
+      return
+    }
+    await cerrarSala(db, sala.id)
     res.status(200).json({ sala: await obtenerSala(db, sala.id) })
   })
 

@@ -51,11 +51,27 @@ export function renderPerfil(contenedor: HTMLElement): void {
         })
         .join('')
 
+      const botonesBanco = datos.salas
+        .filter(function (entrada) { return entrada.sala.documentoId !== null })
+        .map(function (entrada) {
+          return '<p><strong>' + escapar(entrada.documentoTitulo) + '</strong> — <button data-banco="' + entrada.sala.documentoId + '" data-nombre="' + escapar(entrada.documentoTitulo) + '.json">Descargar banco (.json)</button></p>'
+        })
+        .join('')
+
       contenedor.innerHTML = [
         '<h1>Mi perfil</h1>',
-        '<h2>Exportar mis fichas a Anki (.apkg)</h2>',
-        '<p><button id="todas">Descargar TODAS mis fichas (mazos por documento::sección)</button></p>',
-        botones === '' ? '<p>Aún no tienes fichas: completa un dump para generarlas.</p>' : botones,
+        '<h2>Exportar mis fichas</h2>',
+        '<p><button id="banco-todas">Descargar banco personalizado (.zip de .json por documento)</button></p>',
+        botonesBanco === '' ? '' : botonesBanco,
+        '<p><button id="todas">Descargar TODAS mis fichas para Anki (.apkg, mazos por documento::sección)</button></p>',
+        botones === '' ? '<p>Aún no tienes fichas: completa un dump o importa un banco.</p>' : botones,
+        '<h2>Importar banco personalizado (.json o .zip)</h2>',
+        '<form id="forma-importar-perfil">',
+        '<label>Archivos <input type="file" id="archivos-banco" multiple accept=".json,.zip,.txt" /></label>',
+        '<button type="submit">Importar banco</button>',
+        '<p class="error" id="error-importar" hidden></p>',
+        '</form>',
+        '<div id="resultado-importar"></div>',
         '<p class="error" id="error-perfil" hidden></p>'
       ].join('')
 
@@ -67,6 +83,47 @@ export function renderPerfil(contenedor: HTMLElement): void {
         elemento.addEventListener('click', function () {
           descargar(elemento.dataset.ruta as string, elemento.dataset.nombre as string)
         })
+      })
+      contenedor.querySelectorAll('button[data-banco]').forEach(function (boton) {
+        const elemento = boton as HTMLButtonElement
+        elemento.addEventListener('click', function () {
+          descargar('/api/export/banco?documento_id=' + elemento.dataset.banco, elemento.dataset.nombre as string)
+        })
+      })
+      document.getElementById('banco-todas')?.addEventListener('click', function () {
+        descargar('/api/export/banco/todas', 'banco-personalizado.zip')
+      })
+
+      const formaImportar = document.getElementById('forma-importar-perfil') as HTMLFormElement
+      formaImportar.addEventListener('submit', function (evento) {
+        evento.preventDefault()
+        const entrada = document.getElementById('archivos-banco') as HTMLInputElement
+        const error = document.getElementById('error-importar') as HTMLElement
+        if (entrada.files === null || entrada.files.length === 0) {
+          error.hidden = false
+          error.textContent = 'Selecciona al menos un archivo .json o .zip'
+          return
+        }
+        const datos = new FormData()
+        for (const archivo of entrada.files) {
+          datos.append('archivos', archivo)
+        }
+        fetch('/api/import/banco', { method: 'POST', headers: { Authorization: 'Bearer ' + (obtenerToken() ?? '') }, body: datos })
+          .then(function (r) { return r.json() })
+          .then(function (respuesta) {
+            const zona = document.getElementById('resultado-importar') as HTMLElement
+            const lineas = (respuesta.resultados as Array<{ archivo: string; creadas: number; actualizadas: number; rechazadas: Array<{ campo: string; motivo: string }> }>)
+              .map(function (r) {
+                return '<li><strong>' + escapar(r.archivo) + '</strong>: ' + String(r.creadas) + ' creadas, ' + String(r.actualizadas) + ' actualizadas' +
+                  (r.rechazadas.length > 0 ? ' — RECHAZADAS: ' + r.rechazadas.map(function (x) { return escapar(x.campo + ': ' + x.motivo) }).join('; ') : '') + '</li>'
+              })
+              .join('')
+            zona.innerHTML = '<ul>' + lineas + '</ul>'
+          })
+          .catch(function (e: Error) {
+            error.hidden = false
+            error.textContent = e.message
+          })
       })
     })
     .catch(function (e: Error) {

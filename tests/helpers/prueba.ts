@@ -3,6 +3,7 @@ import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { createClient, type Client } from '@libsql/client'
 import { inicializarSchema } from '../../src/db/client.js'
+import { ejecutarMigraciones } from '../../src/db/migraciones.js'
 import { crearApp } from '../../src/server/app.js'
 import { cargarEnv } from '../../src/server/config/env.js'
 import type { Express } from 'express'
@@ -17,6 +18,7 @@ export async function crearDbDePrueba(): Promise<Client> {
   const url = 'file:' + join(DIR_TESTS, 'test-' + randomUUID() + '.db')
   const db = createClient({ url: url })
   await inicializarSchema(db)
+  await ejecutarMigraciones(db)
   return db
 }
 

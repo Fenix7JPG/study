@@ -86,15 +86,88 @@ export async function calcularRanking(db: Client, salaId: string, ahora: Date): 
   })
 }
 
-// Agrega la marca de ganador (primera posición) para la respuesta de la API
-export function conGanador(filas: FilaRankingConNombre[]): EntradaRanking[] {
+// Agrega la marca de ganador (primera posición). marcarGanador=false deja
+// el ranking visible "en vivo" sin ganador aún (Modo 2 en curso, FR-116).
+export function conGanador(filas: FilaRankingConNombre[], marcarGanador = true): EntradaRanking[] {
   return filas.map(function (fila, indice) {
     return {
       cuentaId: fila.cuentaId,
       nombre: fila.nombre,
       puntosSesion: fila.puntosSesion,
       sesionId: fila.sesionId,
-      ganador: indice === 0 && filas.length > 0
+      ganador: marcarGanador && indice === 0 && filas.length > 0
     }
   })
+}
+
+// ¿La sesión está cerrada? = respondió todas las fichas de su cola
+async function sesionCerrada(db: Client, sesionId: string): Promise<boolean> {
+  const sesion = await db.execute({
+    sql: 'SELECT fichas_ids FROM SesionPractica WHERE id = ?',
+    args: [sesionId]
+  })
+  if (sesion.rows.length === 0) return true
+  let total = 0
+  try {
+    const cola = JSON.parse(String((sesion.rows[0] as ArrayLike<unknown>)[0]) ?? '[]')
+    total = Array.isArray(cola) ? cola.length : 0
+  } catch {
+    total = 0
+  }
+  const respondidas = await db.execute({
+    sql: 'SELECT COUNT(*) FROM RespuestaPractica WHERE sesion_practica_id = ?',
+    args: [sesionId]
+  })
+  const n = Number((respondidas.rows[0] as ArrayLike<unknown>)[0])
+  return total === 0 || n >= total
+}
+
+// Ranking completo de una sala para la API (Modo 1 y Modo 2, FR-116/117):
+// - Modo 1 (dump): igual que 001 — ganador = primera cuando hay >1 participantes.
+// - Modo 2 (multijugador): ranking visible en vivo SIN ganador; el ganador se
+//   marca cuando TODAS las sesiones activas de los miembros cerraron o el host
+//   cerró la sala (cerrada_en no NULL, que además congela el ranking).
+export async function calcularRankingDeSala(db: Client, salaId: string): Promise<{ ranking: EntradaRanking[] | null; salaCerrada: boolean }> {
+  const infoSala = await db.execute({
+    sql: 'SELECT modo, cerrada_en FROM Sala WHERE id = ?',
+    args: [salaId]
+  })
+  if (infoSala.rows.length === 0) {
+    return { ranking: null, salaCerrada: false }
+  }
+  const modo = String((infoSala.rows[0] as ArrayLike<unknown>)[0]) === 'multijugador' ? 'multijugador' : 'dump'
+  const cerradaEn = (infoSala.rows[0] as ArrayLike<unknown>)[1] as string | null
+  const salaCerrada = cerradaEn !== null
+
+  const filas = await calcularRanking(db, salaId, new Date())
+  if (filas.length === 0) {
+    return { ranking: null, salaCerrada: salaCerrada }
+  }
+
+  if (modo === 'dump') {
+    // Comportamiento congelado del feature 001
+    return { ranking: conGanador(filas, filas.length > 1), salaCerrada: salaCerrada }
+  }
+
+  if (salaCerrada) {
+    // Sala cerrada por el host: ganador señalado, ranking congelado
+    return { ranking: conGanador(filas, true), salaCerrada: true }
+  }
+
+  if (filas.length === 1) {
+    return { ranking: null, salaCerrada: false }
+  }
+
+  // ¿Todas las sesiones de los participantes cerraron?
+  let todasCerradas = true
+  for (const fila of filas) {
+    if (!(await sesionCerrada(db, fila.sesionId))) {
+      todasCerradas = false
+      break
+    }
+  }
+  if (todasCerradas) {
+    return { ranking: conGanador(filas, true), salaCerrada: false }
+  }
+  return { ranking: conGanador(filas, false), salaCerrada: false }
 }

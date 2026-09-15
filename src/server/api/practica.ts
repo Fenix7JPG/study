@@ -4,7 +4,7 @@ import { crearMiddlewareAuth } from './middleware/auth.js'
 import type { ClienteIA } from '../ai/openrouter.js'
 import { seleccionarFichas, calificarPracticaConIA } from '../services/practica.js'
 import { puntosPractica, valoresDeSala } from '../services/puntos.js'
-import { listarFichasDeSala, obtenerFichaPorId, actualizarSm2, marcarPendiente } from '../models/fichas.js'
+import { listarFichasDeSala, listarFichasDeCuentaTodas, obtenerFichaPorId, actualizarSm2, marcarPendiente } from '../models/fichas.js'
 import { crearSesion, obtenerSesion, sumarPuntosSesion, crearRespuestaPractica, listarRespuestasDeSesion } from '../models/practica.js'
 import { esMiembro, obtenerSala } from '../models/salas.js'
 import { aplicarSm2 } from '../services/sm2.js'
@@ -41,8 +41,12 @@ export function crearRouterPractica(db: Client, jwtSecret: string, clienteIA: Cl
       tamano = cuerpo.tamano
     }
 
-    // Selección (FR-028): pendientes SIEMPRE → vencidas → prioridad alta → baja
-    const fichas = await listarFichasDeSala(db, cuentaId, salaId)
+    // Selección (FR-028 / FR-113): pendientes SIEMPRE → vencidas → prioridad
+    // alta → baja. En multijugador el pool es TODAS las fichas de la cuenta
+    // (Modo 1 o importadas); en dump, las del documento de la sala.
+    const fichas = sala.modo === 'multijugador'
+      ? await listarFichasDeCuentaTodas(db, cuentaId)
+      : await listarFichasDeSala(db, cuentaId, salaId)
     const seleccion = seleccionarFichas(fichas, tamano)
     if (seleccion.length === 0) {
       res.status(400).json({ error: 'no hay fichas disponibles para practicar en esta sala' })
@@ -182,9 +186,10 @@ export function crearRouterPractica(db: Client, jwtSecret: string, clienteIA: Cl
 
     // Ranking POR SESIÓN si hay otros participantes con sesión activa o
     // reciente (24 h) — FR-034/036
-    const { calcularRanking, conGanador } = await import('../services/ranking.js')
-    const filas = await calcularRanking(db, sesion.salaId, new Date())
-    const ranking = filas.length > 1 ? conGanador(filas) : null
+    // Ranking POR SESIÓN (FR-034/036 Modo 1; FR-116/117 Modo 2)
+    const { calcularRankingDeSala } = await import('../services/ranking.js')
+    const resultado = await calcularRankingDeSala(db, sesion.salaId)
+    const ranking = resultado.ranking
 
     res.status(200).json({
       puntos_obtenidos_total: sesion.puntosObtenidosTotal,

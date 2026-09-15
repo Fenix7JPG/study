@@ -86,24 +86,29 @@ export async function listarSeccionesDeDocumento(db: Client, documentoId: string
 export interface Documento {
   id: string
   titulo: string
-  jsonIngesta: string
+  jsonIngesta: string | null
   fechaCarga: string
   cuentaCreadoraId: string
+  origen: 'ingesta' | 'importado'
 }
 
-export async function crearDocumento(db: Client, datos: { titulo: string; jsonIngesta: string; cuentaCreadoraId: string }): Promise<Documento> {
+export async function crearDocumento(db: Client, datos: { titulo: string; jsonIngesta: string | null; cuentaCreadoraId: string; origen?: 'ingesta' | 'importado' }): Promise<Documento> {
   const id = randomUUID()
   const fechaCarga = new Date().toISOString()
+  const origen = datos.origen ?? 'ingesta'
+  // Documento importado sin ingesta: centinela 'null' (SQLite mantiene NOT
+  // NULL en la columna; mismo criterio que las secciones importadas)
+  const jsonIngesta = datos.jsonIngesta ?? 'null'
   await db.execute({
-    sql: 'INSERT INTO Documento (id, titulo, json_ingesta, fecha_carga, cuenta_creadora_id) VALUES (?, ?, ?, ?, ?)',
-    args: [id, datos.titulo, datos.jsonIngesta, fechaCarga, datos.cuentaCreadoraId]
+    sql: 'INSERT INTO Documento (id, titulo, json_ingesta, fecha_carga, cuenta_creadora_id, origen) VALUES (?, ?, ?, ?, ?, ?)',
+    args: [id, datos.titulo, jsonIngesta, fechaCarga, datos.cuentaCreadoraId, origen]
   })
-  return { id: id, titulo: datos.titulo, jsonIngesta: datos.jsonIngesta, fechaCarga: fechaCarga, cuentaCreadoraId: datos.cuentaCreadoraId }
+  return { id: id, titulo: datos.titulo, jsonIngesta: datos.jsonIngesta, fechaCarga: fechaCarga, cuentaCreadoraId: datos.cuentaCreadoraId, origen: origen }
 }
 
 export async function obtenerDocumento(db: Client, id: string): Promise<Documento | null> {
   const resultado = await db.execute({
-    sql: 'SELECT id, titulo, json_ingesta, fecha_carga, cuenta_creadora_id FROM Documento WHERE id = ?',
+    sql: 'SELECT id, titulo, json_ingesta, fecha_carga, cuenta_creadora_id, origen FROM Documento WHERE id = ?',
     args: [id]
   })
   if (resultado.rows.length === 0) {
@@ -113,8 +118,46 @@ export async function obtenerDocumento(db: Client, id: string): Promise<Document
   return {
     id: fila[0] as string,
     titulo: fila[1] as string,
-    jsonIngesta: fila[2] as string,
+    jsonIngesta: (fila[2] as string | null) ?? null,
     fechaCarga: fila[3] as string,
-    cuentaCreadoraId: fila[4] as string
+    cuentaCreadoraId: fila[4] as string,
+    origen: (fila[5] as 'ingesta' | 'importado' | null) ?? 'ingesta'
   }
+}
+
+// Documento importado (feature 002, FR-109): creado al primer import de un
+// documento_titulo para la cuenta y reutilizado después; contenedor SEPARADO
+// de cualquier Documento de ingesta con el mismo titulo (research D18).
+
+export async function buscarDocumentoImportado(db: Client, cuentaId: string, titulo: string): Promise<Documento | null> {
+  const resultado = await db.execute({
+    sql: "SELECT id, titulo, json_ingesta, fecha_carga, cuenta_creadora_id, origen FROM Documento WHERE cuenta_creadora_id = ? AND titulo = ? AND origen = 'importado' LIMIT 1",
+    args: [cuentaId, titulo]
+  })
+  if (resultado.rows.length === 0) {
+    return null
+  }
+  const fila = resultado.rows[0]
+  return { id: fila[0] as string, titulo: fila[1] as string, jsonIngesta: null, fechaCarga: fila[3] as string, cuentaCreadoraId: fila[4] as string, origen: 'importado' }
+}
+
+// Seccion contenedora de un documento importado (UNA por archivo). SQLite no
+// permite quitar NOT NULL sin reconstruir la tabla: contenido y mapa usan el
+// centinela 'null' y num_palabras 0 (documentado en data-model.md).
+export async function buscarSeccionImportada(db: Client, documentoId: string): Promise<Seccion | null> {
+  const secciones = await listarSeccionesDeDocumento(db, documentoId)
+  return secciones.length > 0 ? secciones[0] : null
+}
+
+export async function crearSeccionImportada(db: Client, datos: { documentoId: string; titulo: string }): Promise<Seccion> {
+  return crearSeccion(db, {
+    documentoId: datos.documentoId,
+    titulo: datos.titulo,
+    orden: 1,
+    // el CHECK de la tabla exige >= 1 (no se puede relajar sin reconstruir);
+    // 1 actúa como centinela: las secciones importadas nunca tienen dump
+    numPalabras: 1,
+    contenido: 'null',
+    mapaConceptos: 'null'
+  })
 }

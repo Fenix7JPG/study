@@ -1,4 +1,5 @@
 import { crearClienteDb, inicializarSchema } from '../db/client.js'
+import { ejecutarMigraciones } from '../db/migraciones.js'
 import { cargarEnv } from './config/env.js'
 import { crearApp } from './app.js'
 
@@ -22,6 +23,9 @@ function main(): void {
   const db = crearClienteDb(env.tursoDatabaseUrl, env.tursoAuthToken)
 
   inicializarSchema(db)
+    .then(function () {
+      return ejecutarMigraciones(db)
+    })
     .then(function () {
       const app = crearApp({ db: db, env: env })
       app.listen(env.port, function () {
