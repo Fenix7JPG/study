@@ -55,12 +55,14 @@ export function enrutar(): void {
   const app = document.getElementById('app')
   if (!app) return
 
+  // Parseo del hash: '#/sala/ID' → ['sala', 'ID'] (sin el '#' inicial)
   const hash = location.hash || '#/salas'
-  const partes = hash.split('/')  // p. ej. '#/sala/ID' → ['#/sala', 'ID']
+  const partes = hash.slice(1).split('/').filter(function (p) { return p !== '' })
+  const principal = partes[0] ?? 'salas'
   const sesionIniciada = obtenerToken() !== null
 
   if (!sesionIniciada) {
-    if (hash === '#/registro') {
+    if (principal === 'registro') {
       renderRegistro(app, irASalas)
     } else {
       renderLogin(app, irASalas)
@@ -77,17 +79,17 @@ export function enrutar(): void {
   }
 
   // Rutas simples
-  if (partes[0] === '#/crear-sala') { montar(function (z) { renderCrearSala(z, irASalas) }); return }
-  if (partes[0] === '#/unirse') { montar(function (z) { renderUnirse(z, irASalas) }); return }
-  if (partes[0] === '#/perfil') { montar(renderPerfil); return }
-  if (partes[0] === '#/salir') { cerrarSesion(); enrutar(); return }
+  if (principal === 'crear-sala') { montar(function (z) { renderCrearSala(z, irASalas) }); return }
+  if (principal === 'unirse') { montar(function (z) { renderUnirse(z, irASalas) }); return }
+  if (principal === 'perfil') { montar(renderPerfil); return }
+  if (principal === 'salir') { cerrarSesion(); enrutar(); return }
 
   // Rutas con parámetro: #/sala/ID, #/seccion/ID, #/seccion/ID/fichas,
   // #/practica/SALAID, #/ranking/SALAID
-  if (partes[0] === '#/sala' && partes[1]) { montar(function (z) { renderSala(z, partes[1]) }); return }
-  if (partes[0] === '#/practica' && partes[1]) { montar(function (z) { renderPractica(z, partes[1]) }); return }
-  if (partes[0] === '#/ranking' && partes[1]) { montar(function (z) { renderRanking(z, partes[1]) }); return }
-  if (partes[0] === '#/seccion' && partes[1]) {
+  if (principal === 'sala' && partes[1]) { montar(function (z) { renderSala(z, partes[1]) }); return }
+  if (principal === 'practica' && partes[1]) { montar(function (z) { renderPractica(z, partes[1]) }); return }
+  if (principal === 'ranking' && partes[1]) { montar(function (z) { renderRanking(z, partes[1]) }); return }
+  if (principal === 'seccion' && partes[1]) {
     if (partes[2] === 'fichas') { montar(function (z) { renderFichas(z, partes[1]) }); return }
     montar(function (z) { renderDumpSeccion(z, partes[1]) })
     return
