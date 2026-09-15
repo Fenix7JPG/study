@@ -54,12 +54,38 @@ export function renderListaSalas(contenedor: HTMLElement, _irASalas: () => void)
     })
 }
 
+// Quita tolerancias de la respuesta del chat de IA: fences de código
+// markdown y el marcador CONTINUAR fuera del JSON (regla 12 del prompt maestro)
+export function limpiarRespuestaIA(texto: string): string {
+  let limpio = texto.trim()
+  if (limpio.startsWith('```')) {
+    limpio = limpio.replace(/^```[a-zA-Z]*\s*/, '').replace(/```\s*$/, '').trim()
+  }
+  const ultimaLlave = limpio.lastIndexOf('}')
+  if (ultimaLlave >= 0 && ultimaLlave < limpio.length - 1) {
+    const cola = limpio.slice(ultimaLlave + 1).trim()
+    if (cola.toUpperCase().startsWith('CONTINUAR')) {
+      limpio = limpio.slice(0, ultimaLlave + 1)
+    }
+  }
+  return limpio
+}
+
 export function renderCrearSala(contenedor: HTMLElement, irASalas: () => void): void {
   contenedor.innerHTML = [
     '<h1>Crear sala</h1>',
-    '<p>Pega el JSON generado con el <strong>prompt maestro de ingesta</strong> (debe cumplir su esquema exacto).</p>',
+    '<div class="pasos">',
+    '<p><strong>¿Cómo se genera el JSON?</strong> (el Word NO se sube aquí)</p>',
+    '<ol>',
+    '<li>Abre un chat de IA (Claude, ChatGPT…) que acepte archivos.</li>',
+    '<li>Adjunta tu <strong>documento Word</strong> (solo texto y tablas).</li>',
+    '<li>Pega el <strong>prompt maestro de ingesta</strong> tal cual y envíalo.</li>',
+    '<li>Copia la respuesta (el JSON) y cárgala aquí con el botón de archivo o pegándola en el cuadro.</li>',
+    '</ol>',
+    '</div>',
     '<form id="forma-crear">',
-    '<label>JSON de ingesta<br /><textarea name="json" rows="10" cols="70" required></textarea></label>',
+    '<label>Archivo JSON de ingesta (opcional) <input type="file" id="cargar-json" accept=".json,.txt,.md" /></label>',
+    '<label>…o pega el JSON aquí<br /><textarea name="json" rows="10" cols="70" placeholder="{ &quot;documento&quot;: { … } }"></textarea></label>',
     '<fieldset><legend>Configuración opcional (vacío = calcular por sección)</legend>',
     '<label>Tiempo de lectura (min) <input type="number" name="lectura" min="1" /></label>',
     '<label>Tiempo de escritura (min) <input type="number" name="escritura" min="1" /></label>',
@@ -75,19 +101,32 @@ export function renderCrearSala(contenedor: HTMLElement, irASalas: () => void): 
   const forma = document.getElementById('forma-crear') as HTMLFormElement
   const error = document.getElementById('error-crear') as HTMLElement
   const resultado = document.getElementById('resultado-crear') as HTMLElement
+  const areaJson = forma.querySelector('textarea') as HTMLTextAreaElement
+
+  // Cargar el archivo JSON y volcarlo (limpio) al cuadro de texto
+  document.getElementById('cargar-json')?.addEventListener('change', function (evento) {
+    const archivo = (evento.target as HTMLInputElement).files?.[0]
+    if (archivo === undefined) return
+    const lector = new FileReader()
+    lector.onload = function () {
+      areaJson.value = limpiarRespuestaIA(String(lector.result))
+    }
+    lector.readAsText(archivo)
+  })
 
   forma.addEventListener('submit', function (evento) {
     evento.preventDefault()
     error.hidden = true
     const datos = new FormData(forma)
 
-    // El JSON se valida en el backend contra el esquema del prompt maestro
+    // Limpieza tolerante + chequeo local de que sea JSON parseable; la
+    // validación ESTRICTA del esquema la hace el backend (FR-007)
     let jsonIngesta: unknown
     try {
-      jsonIngesta = JSON.parse(String(datos.get('json')))
+      jsonIngesta = JSON.parse(limpiarRespuestaIA(String(datos.get('json'))))
     } catch {
       error.hidden = false
-      error.textContent = 'El texto pegado no es JSON válido.'
+      error.textContent = 'El contenido no es JSON válido. Debe ser la respuesta JSON del prompt maestro de ingesta (no el documento Word).'
       return
     }
 
