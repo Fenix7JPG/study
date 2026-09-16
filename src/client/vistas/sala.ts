@@ -57,10 +57,12 @@ export function renderSala(contenedor: HTMLElement, salaId: string): void {
           ].join('')
         : ''
 
-      const cierreHost = esMultijugador && detalle.rol === 'administrador'
-        ? (detalle.sala.cerradaEn === null
-            ? '<button id="cerrar-sala">Cerrar sala (congelar ranking y señalar ganador)</button>'
-            : '<p>Sala cerrada el ' + escapar(detalle.sala.cerradaEn.slice(0, 10)) + '.</p>')
+      const cierreHost = detalle.rol === 'administrador'
+        ? (esMultijugador
+            ? (detalle.sala.cerradaEn === null
+                ? '<button id="cerrar-sala">Cerrar sala (congelar ranking y señalar ganador)</button>'
+                : '<p>Sala cerrada el ' + escapar(detalle.sala.cerradaEn.slice(0, 10)) + '.</p>')
+            : '<button id="terminar-practica">Terminar sesión de práctica (entrega los bancos a todos)</button>')
         : ''
 
       contenedor.innerHTML = [
@@ -106,6 +108,19 @@ export function renderSala(contenedor: HTMLElement, salaId: string): void {
         })
       }
 
+      const botonTerminar = document.getElementById('terminar-practica')
+      if (botonTerminar) {
+        botonTerminar.addEventListener('click', function () {
+          apiFetch('/api/salas/' + salaId + '/terminar-practica', { method: 'POST' })
+            .then(function () {
+              window.alert('Sesión de práctica terminada. Los participantes ya pueden ver su resumen y descargar su banco.')
+            })
+            .catch(function (e: Error) {
+              window.alert(e.message)
+            })
+        })
+      }
+
       const botonCerrar = document.getElementById('cerrar-sala')
       if (botonCerrar) {
         botonCerrar.addEventListener('click', function () {
@@ -119,7 +134,7 @@ export function renderSala(contenedor: HTMLElement, salaId: string): void {
         })
       }
 
-      if (detalle.rol === 'administrador') {
+      if (detalle.rol === 'administrador' && !esMultijugador) {
         const forma = document.getElementById('forma-config') as HTMLFormElement
         const error = document.getElementById('error-config') as HTMLElement
         forma.addEventListener('submit', function (evento) {

@@ -12,8 +12,11 @@ interface FichaPractica {
 export function renderPractica(contenedor: HTMLElement, salaId: string): void {
   contenedor.innerHTML = [
     '<h1>Práctica</h1>',
+    '<p id="nota-modo">Cargando…</p>',
     '<form id="forma-inicio">',
+    '<div id="zona-tamano">',
     '<label>Tamaño de la sesión (vacío = configurado en la sala) <input type="number" min="1" name="tamano" /></label>',
+    '</div>',
     '<button type="submit">Iniciar sesión</button>',
     '<p class="error" id="error-inicio" hidden></p>',
     '</form>',
@@ -31,6 +34,10 @@ export function renderPractica(contenedor: HTMLElement, salaId: string): void {
     apiFetch<{ ficha: FichaPractica | null; respondidas: number; total: number; sesion_cerrada: boolean }>('/api/practica/' + sesionId + '/siguiente')
       .then(function (datos) {
         if (datos.ficha === null || datos.sesion_cerrada) {
+          if (datos.sin_fichas_ahora) {
+            zona.innerHTML = '<p>No hay fichas para repasar en este momento: vuelve cuando venza tu próximo repaso. La sesión sigue abierta hasta que el host la termine.</p><p><a href="#/sala/' + salaId + '">Volver a la sala</a></p>'
+            return
+          }
           resumen(sesionId)
           return
         }
@@ -151,6 +158,20 @@ export function renderPractica(contenedor: HTMLElement, salaId: string): void {
       temporizadorRanking = undefined
     }
   }
+
+  // En dump la práctica es infinita (feature 004): sin tamaño; la cierra el host
+  apiFetch<{ sala: { modo: 'dump' | 'multijugador' } }>('/api/salas/' + salaId)
+    .then(function (detalle) {
+      const zonaTamano = document.getElementById('zona-tamano') as HTMLElement
+      const nota = document.getElementById('nota-modo') as HTMLElement
+      if (detalle.sala.modo === 'dump') {
+        zonaTamano.style.display = 'none'
+        nota.textContent = 'Práctica continua: repasa hasta que el host termine la sesión.'
+      } else {
+        nota.textContent = 'Modo multijugador: tu cola termina al completar el tamaño elegido.'
+      }
+    })
+    .catch(function () { /* la vista funciona igual sin la nota */ })
 
   forma.addEventListener('submit', function (evento) {
     evento.preventDefault()

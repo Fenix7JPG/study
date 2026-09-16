@@ -132,25 +132,23 @@ describe('práctica con SM-2 y puntos (T039–T041)', function () {
     expect(respuesta.status).toBe(409)
   })
 
-  it('al completar el tamaño, la sesión cierra y el resumen coincide (SC-006)', async function () {
+  it('dump infinito: la cola se re-extiende con las pendientes y el resumen coincide (SC-006)', async function () {
     const siguiente = await request(app).get('/api/practica/' + sesionId + '/siguiente').set('Authorization', 'Bearer ' + tokenAna)
-    if (siguiente.body.ficha !== null) {
-      stub.fijar([{ puntuacion_calidad: 3, alucinacion_detectada: false, explicacion: 'ok' }])
-      await request(app)
-        .post('/api/practica/' + sesionId + '/responder')
-        .set('Authorization', 'Bearer ' + tokenAna)
-        .send({ ficha_id: siguiente.body.ficha.id, respuesta: 'x' })
-    }
+    // Feature 004: en dump la sesión es infinita — al agotarse la cola se
+    // re-seleccionan las fichas PENDIENTES (f2 y f3 siguen pendiente tras
+    // sus calificaciones q=2 y q=0) en lugar de cerrarse por conteo
     const cerrada = await request(app).get('/api/practica/' + sesionId + '/siguiente').set('Authorization', 'Bearer ' + tokenAna)
-    expect(cerrada.body.sesion_cerrada).toBe(true)
+    expect(cerrada.body.sesion_cerrada).toBe(false)
+    expect(cerrada.body.ficha).not.toBeNull()
 
     const masRespuestas = await request(app)
       .post('/api/practica/' + sesionId + '/responder')
       .set('Authorization', 'Bearer ' + tokenAna)
       .send({ ficha_id: 'x', respuesta: 'x' })
-    expect(masRespuestas.status).toBe(409)
+    expect(masRespuestas.status).toBe(409) // solo la ficha actual puede responderse
 
     const resumen = await request(app).get('/api/practica/' + sesionId + '/resumen').set('Authorization', 'Bearer ' + tokenAna)
+    console.log('RESUMEN BODY:', JSON.stringify(resumen.body))
     expect(resumen.body.respondidas).toBe(3)
     // 40 + 5 + (−15) = 30
     expect(resumen.body.puntos_obtenidos_total).toBe(30)

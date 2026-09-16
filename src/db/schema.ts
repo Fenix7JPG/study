@@ -122,7 +122,9 @@ CREATE TABLE IF NOT EXISTS SesionPractica (
   puntos_obtenidos_total INTEGER NOT NULL DEFAULT 0,
   -- Cola de fichas de la sesión (ids en orden): campo auxiliar para servir
   -- la sesión de práctica de forma determinista (ver plan.md Complexity)
-  fichas_ids TEXT NOT NULL DEFAULT '[]'
+  fichas_ids TEXT NOT NULL DEFAULT '[]',
+  -- feature 004: cierre explícito por el host (dump infinito); NULL = abierta
+  cerrada_en TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_sesion_cuenta ON SesionPractica (cuenta_id, fecha);

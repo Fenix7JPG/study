@@ -28,6 +28,14 @@ import {
 export function crearRouterSalas(db: Client, jwtSecret: string, clienteIA: ClienteIA): Router {
   const router = Router()
 
+  // Envuelve handlers async: cualquier rechazo llega al middleware de error
+  // y el cliente recibe SIEMPRE JSON (nunca una página HTML)
+  const manejador = function (handler: (req: express.Request, res: express.Response) => Promise<void>) {
+    return function (req: express.Request, res: express.Response, next: express.NextFunction): void {
+      handler(req, res).catch(next)
+    }
+  }
+
   // Todas las rutas de salas requieren cuenta autenticada (FR-004)
   router.use(crearMiddlewareAuth(jwtSecret))
 
@@ -401,6 +409,23 @@ export function crearRouterSalas(db: Client, jwtSecret: string, clienteIA: Clien
     })
   })
 
+  // ─── POST /api/salas/:id/terminar-practica (solo host, FR-303) ──────────
+  router.post('/:id/terminar-practica', manejador(async function (req, res) {
+    const sala = await obtenerSala(db, String(req.params.id))
+    if (sala === null) {
+      res.status(404).json({ error: 'sala no encontrada' })
+      return
+    }
+    const cuentaId = req.cuentaId as string
+    if (!(await esAdministrador(db, cuentaId, sala.id))) {
+      res.status(403).json({ error: 'solo el administrador puede terminar la sesión de práctica' })
+      return
+    }
+    const { cerrarSesionesAbiertasDeSala } = await import('../models/practica.js')
+    const cerradas = await cerrarSesionesAbiertasDeSala(db, sala.id)
+    res.status(200).json({ sesiones_cerradas: cerradas })
+  }))
+
   // ─── PATCH /api/salas/:id/cerrar (solo host, FR-117) ────────────────────
   router.patch('/:id/cerrar', async function (req, res) {
     const sala = await obtenerSala(db, req.params.id)
@@ -423,6 +448,11 @@ export function crearRouterSalas(db: Client, jwtSecret: string, clienteIA: Clien
 
   // Middleware de error: cualquier excepción no capturada en los handlers
   // (Express 5 propaga los rechazos async aquí) responde SIEMPRE JSON
+  router.use(function (error: unknown, _req: unknown, res: express.Response, _next: unknown): void {
+    res.status(500).json({ error: 'error interno: ' + (error instanceof Error ? error.message : String(error)) })
+  })
+
+  // Middleware de error: excepciones no capturadas → SIEMPRE JSON
   router.use(function (error: unknown, _req: unknown, res: express.Response, _next: unknown): void {
     res.status(500).json({ error: 'error interno: ' + (error instanceof Error ? error.message : String(error)) })
   })

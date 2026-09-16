@@ -141,10 +141,12 @@ export async function listarSalasDeCuenta(
       'FROM Membresia m',
       'JOIN Sala s ON s.id = m.sala_id',
       'LEFT JOIN Documento d ON d.id = s.documento_id',
-      'WHERE m.cuenta_id = ?',
+      // FR-305: solo salas activas o con actividad reciente (24 h) — lo
+      // duradero del jugador es su banco portable, no la lista de salas
+      "WHERE m.cuenta_id = ? AND (NOT EXISTS (SELECT 1 FROM SesionPractica sp WHERE sp.sala_id = s.id AND sp.cuenta_id = m.cuenta_id) OR EXISTS (SELECT 1 FROM SesionPractica sp WHERE sp.sala_id = s.id AND sp.cuenta_id = m.cuenta_id AND (sp.cerrada_en IS NULL OR sp.fecha >= ?)))",
       'ORDER BY m.fecha_union DESC'
     ].join(' '),
-    args: [cuentaId]
+    args: [cuentaId, new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString()]
   })
 
   const salida: Array<{ sala: Sala; documentoTitulo: string | null; rol: 'administrador' | 'participante' }> = []

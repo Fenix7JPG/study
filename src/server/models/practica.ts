@@ -15,6 +15,8 @@ export interface SesionPractica {
   // Cola de fichas en el orden en que se preguntarán (entidad auxiliar,
   // ver plan.md Complexity Tracking)
   fichasIds: string[]
+  // feature 004: cierre explícito por el host; NULL = abierta
+  cerradaEn: string | null
 }
 
 export interface RespuestaPractica {
@@ -31,7 +33,7 @@ export interface RespuestaPractica {
 }
 
 // Columnas: id, cuenta_id, sala_id, fecha, numero_de_preguntas, puntos_obtenidos_total
-const SELECT_SESION = 'SELECT id, cuenta_id, sala_id, fecha, numero_de_preguntas, puntos_obtenidos_total, fichas_ids FROM SesionPractica'
+const SELECT_SESION = 'SELECT id, cuenta_id, sala_id, fecha, numero_de_preguntas, puntos_obtenidos_total, fichas_ids, cerrada_en FROM SesionPractica'
 
 function mapearSesion(fila: ArrayLike<unknown>): SesionPractica {
   let fichasIds: string[] = []
@@ -50,7 +52,8 @@ function mapearSesion(fila: ArrayLike<unknown>): SesionPractica {
     fecha: fila[3] as string,
     numeroDePreguntas: fila[4] as number,
     puntosObtenidosTotal: fila[5] as number,
-    fichasIds: fichasIds
+    fichasIds: fichasIds,
+    cerradaEn: (fila[7] as string | null) ?? null
   }
 }
 
@@ -68,7 +71,8 @@ export async function crearSesion(db: Client, datos: { cuentaId: string; salaId:
     fecha: fecha,
     numeroDePreguntas: datos.numeroDePreguntas,
     puntosObtenidosTotal: 0,
-    fichasIds: datos.fichasIds
+    fichasIds: datos.fichasIds,
+    cerradaEn: null
   }
 }
 
@@ -175,4 +179,29 @@ export async function ultimaSesionDeCuenta(db: Client, cuentaId: string, salaId:
     return null
   }
   return mapearSesion(resultado.rows[0])
+}
+
+// Cierre explícito de TODAS las sesiones abiertas de una sala (host, FR-303)
+export async function cerrarSesionesAbiertasDeSala(db: Client, salaId: string): Promise<number> {
+  const resultado = await db.execute({
+    sql: 'UPDATE SesionPractica SET cerrada_en = ? WHERE sala_id = ? AND cerrada_en IS NULL',
+    args: [new Date().toISOString(), salaId]
+  })
+  return resultado.rowsAffected
+}
+
+// feature 004: añade más ids a la cola de una sesión abierta (dump infinito)
+export async function extenderCola(db: Client, id: string, nuevosIds: string[]): Promise<void> {
+  if (nuevosIds.length === 0) {
+    return
+  }
+  const sesion = await obtenerSesion(db, id)
+  if (sesion === null) {
+    return
+  }
+  const cola = sesion.fichasIds.concat(nuevosIds)
+  await db.execute({
+    sql: 'UPDATE SesionPractica SET fichas_ids = ? WHERE id = ?',
+    args: [JSON.stringify(cola), id]
+  })
 }

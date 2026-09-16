@@ -9,7 +9,8 @@ const MIGRACIONES: Array<{ tabla: string; columna: string; ddl: string }> = [
   { tabla: 'Sala', columna: 'modo', ddl: "ALTER TABLE Sala ADD COLUMN modo TEXT NOT NULL DEFAULT 'dump'" },
   { tabla: 'Sala', columna: 'cerrada_en', ddl: 'ALTER TABLE Sala ADD COLUMN cerrada_en TEXT' },
   { tabla: 'Ficha', columna: 'concepto_tipo', ddl: 'ALTER TABLE Ficha ADD COLUMN concepto_tipo TEXT' },
-  { tabla: 'Ficha', columna: 'ficha_externa_id', ddl: 'ALTER TABLE Ficha ADD COLUMN ficha_externa_id TEXT' }
+  { tabla: 'Ficha', columna: 'ficha_externa_id', ddl: 'ALTER TABLE Ficha ADD COLUMN ficha_externa_id TEXT' },
+  { tabla: 'SesionPractica', columna: 'cerrada_en', ddl: 'ALTER TABLE SesionPractica ADD COLUMN cerrada_en TEXT' }
 ]
 
 // SQLite no puede relajar un NOT NULL con ALTER TABLE: si Sala.documento_id

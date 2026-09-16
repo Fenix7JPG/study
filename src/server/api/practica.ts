@@ -5,7 +5,7 @@ import type { ClienteIA } from '../ai/openrouter.js'
 import { seleccionarFichas, calificarPracticaConIA } from '../services/practica.js'
 import { puntosPractica, valoresDeSala } from '../services/puntos.js'
 import { listarFichasDeSala, listarFichasDeCuentaTodas, obtenerFichaPorId, actualizarSm2, marcarPendiente } from '../models/fichas.js'
-import { crearSesion, obtenerSesion, sumarPuntosSesion, crearRespuestaPractica, listarRespuestasDeSesion } from '../models/practica.js'
+import { crearSesion, obtenerSesion, sumarPuntosSesion, crearRespuestaPractica, listarRespuestasDeSesion, extenderCola } from '../models/practica.js'
 import { esMiembro, obtenerSala } from '../models/salas.js'
 import { aplicarSm2 } from '../services/sm2.js'
 
@@ -31,14 +31,21 @@ export function crearRouterPractica(db: Client, jwtSecret: string, clienteIA: Cl
       return
     }
 
-    // Tamaño configurable por la cuenta o el administrador (FR-027)
+    // Tamaño: SOLO el modo multijugador lo usa (feature 004: en dump la
+    // práctica es infinita y la cierra el host, FR-301)
     let tamano = sala.configTamanoSesionPractica
-    if (cuerpo.tamano !== undefined) {
+    if (sala.modo === 'multijugador' && cuerpo.tamano !== undefined) {
       if (typeof cuerpo.tamano !== 'number' || !Number.isInteger(cuerpo.tamano) || cuerpo.tamano < 1) {
         res.status(400).json({ error: 'tamano debe ser un entero ≥ 1' })
         return
       }
       tamano = cuerpo.tamano
+    }
+    if (sala.modo === 'dump') {
+      // El tamaño de la cola inicial es el pool disponible; la sesión NO se
+      // cierra por conteo (FR-302)
+      const disponible = await listarFichasDeSala(db, cuentaId, salaId)
+      tamano = Math.max(disponible.length, 1)
     }
 
     // Selección (FR-028 / FR-113): pendientes SIEMPRE → vencidas → prioridad
@@ -71,11 +78,38 @@ export function crearRouterPractica(db: Client, jwtSecret: string, clienteIA: Cl
       res.status(404).json({ error: 'sesión no encontrada' })
       return
     }
+    const salaDeSesion = await obtenerSala(db, sesion.salaId)
+    if (sesion.cerradaEn !== null) {
+      // Cerrada por el host (FR-303): el participante ve su resumen
+      res.status(200).json({ ficha: null, respondidas: 0, total: 0, sesion_cerrada: true, cerrada_por_host: true })
+      return
+    }
+
     const respuestas = await listarRespuestasDeSesion(db, sesion.id)
-    const respondidas = respuestas.length
-    const total = sesion.fichasIds.length
+    let respondidas = respuestas.length
+    let total = sesion.fichasIds.length
+
+    // Cola agotada: en modo dump la sesión es INFINITA (FR-302) → nueva
+    // selección de 6.6 con SOLO las fichas que califican ahora (pendientes o
+    // vencidas); si no hay ninguna, la sesión queda abierta "sin fichas ahora"
+    if (respondidas >= total && salaDeSesion !== null && salaDeSesion.modo === 'dump') {
+      const hoy = new Date().toISOString().slice(0, 10)
+      const pool = await listarFichasDeSala(db, cuentaId, sesion.salaId)
+      const califican = pool.filter(function (f) {
+        return f.pendiente || f.fechaProximoRepaso <= hoy
+      })
+      const nuevas = seleccionarFichas(califican, califican.length)
+      if (nuevas.length > 0) {
+        const nuevasIds = nuevas.map(function (f) { return f.id })
+        await extenderCola(db, sesion.id, nuevasIds)
+        sesion.fichasIds = sesion.fichasIds.concat(nuevasIds)
+        total = sesion.fichasIds.length
+      }
+    }
+
     if (respondidas >= total) {
-      res.status(200).json({ ficha: null, respondidas: respondidas, total: total, sesion_cerrada: true })
+      // Multijugador: cola completada → cierre natural; dump: sin fichas ahora
+      res.status(200).json({ ficha: null, respondidas: respondidas, total: total, sesion_cerrada: true, sin_fichas_ahora: salaDeSesion !== null && salaDeSesion.modo === 'dump' })
       return
     }
     const ficha = await obtenerFichaPorId(db, sesion.fichasIds[respondidas])
@@ -91,6 +125,10 @@ export function crearRouterPractica(db: Client, jwtSecret: string, clienteIA: Cl
       return
     }
 
+    if (sesion.cerradaEn !== null) {
+      res.status(409).json({ error: 'la sesión fue cerrada por el host' })
+      return
+    }
     const respuestas = await listarRespuestasDeSesion(db, sesion.id)
     const total = sesion.fichasIds.length
     if (respuestas.length >= total) {
@@ -196,7 +234,8 @@ export function crearRouterPractica(db: Client, jwtSecret: string, clienteIA: Cl
       respondidas: respuestas.length,
       total: sesion.fichasIds.length,
       por_pregunta: porPregunta,
-      ranking: ranking
+      ranking: ranking,
+      cerrada_por_host: sesion.cerradaEn !== null
     })
   })
 

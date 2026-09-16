@@ -100,16 +100,21 @@ export function conGanador(filas: FilaRankingConNombre[], marcarGanador = true):
   })
 }
 
-// ¿La sesión está cerrada? = respondió todas las fichas de su cola
+// ¿La sesión está cerrada? = cierre explícito del host (feature 004) o
+// respondió todas las fichas de su cola
 async function sesionCerrada(db: Client, sesionId: string): Promise<boolean> {
   const sesion = await db.execute({
-    sql: 'SELECT fichas_ids FROM SesionPractica WHERE id = ?',
+    sql: 'SELECT fichas_ids, cerrada_en FROM SesionPractica WHERE id = ?',
     args: [sesionId]
   })
   if (sesion.rows.length === 0) return true
+  const valores = sesion.rows[0] as ArrayLike<unknown>
+  if (valores[1] !== null && valores[1] !== undefined) {
+    return true // cerrada_en: cierre explícito del host
+  }
   let total = 0
   try {
-    const cola = JSON.parse(String((sesion.rows[0] as ArrayLike<unknown>)[0]) ?? '[]')
+    const cola = JSON.parse(String(valores[0]) ?? '[]')
     total = Array.isArray(cola) ? cola.length : 0
   } catch {
     total = 0
@@ -145,8 +150,17 @@ export async function calcularRankingDeSala(db: Client, salaId: string): Promise
   }
 
   if (modo === 'dump') {
-    // Comportamiento congelado del feature 001
-    return { ranking: conGanador(filas, filas.length > 1), salaCerrada: salaCerrada }
+    // Feature 001: ganador con >1 participantes. Feature 004: con UN solo
+    // participante, el ganador se marca cuando su sesión cerró (fin del dump)
+    let cerrada = true
+    for (const fila of filas) {
+      if (!(await sesionCerrada(db, fila.sesionId))) {
+        cerrada = false
+        break
+      }
+    }
+    const marcar = filas.length > 1 || cerrada
+    return { ranking: conGanador(filas, marcar), salaCerrada: salaCerrada }
   }
 
   if (salaCerrada) {
