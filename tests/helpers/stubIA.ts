@@ -8,14 +8,17 @@ import type { ClienteIA } from '../../src/server/ai/openrouter.js'
 export interface StubIA extends ClienteIA {
   fijar: (cola: Array<unknown | Error>) => void
   llamadas: () => number
+  ultimaEntrada: () => string
 }
 
 export function crearStubIA(): StubIA {
   const cola: Array<unknown | Error> = []
   let total = 0
+  let ultima = ''
   return {
-    async llamar<T>(esquema: ZodType<T>): Promise<T> {
+    async llamar<T>(esquema: ZodType<T>, _prompt: string, entrada: string): Promise<T> {
       total = total + 1
+      ultima = entrada
       const siguiente = cola.length > 0 ? cola.shift() : new Error('stub sin respuesta configurada')
       if (siguiente instanceof Error) {
         throw siguiente
@@ -32,6 +35,9 @@ export function crearStubIA(): StubIA {
     },
     llamadas: function (): number {
       return total
+    },
+    ultimaEntrada: function (): string {
+      return ultima
     }
   }
 }

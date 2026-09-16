@@ -125,3 +125,5 @@ export function validarIngesta(json: unknown): ResultadoValidacionIngesta {
 
   return { ok: true, datos: base.data }
 }
+
+export const ESQUEMA_BASE_INGESTA = ESQUEMA_INGESTA

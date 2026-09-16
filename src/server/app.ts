@@ -43,7 +43,7 @@ export function crearApp(deps: DependenciasApp): Express {
   app.use('/api/auth', crearRouterAuth(deps.db, deps.env.jwtSecret))
 
   // Salas (rutas protegidas con el mismo middleware JWT dentro del router)
-  app.use('/api/salas', crearRouterSalas(deps.db, deps.env.jwtSecret))
+  app.use('/api/salas', crearRouterSalas(deps.db, deps.env.jwtSecret, clienteIA))
 
   // Secciones: ciclo de dump de 2 rondas, contenido y fichas
   app.use('/api/secciones', crearRouterSecciones(deps.db, deps.env.jwtSecret, clienteIA))

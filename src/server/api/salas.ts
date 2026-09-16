@@ -1,8 +1,11 @@
-import { Router } from 'express'
+import express, { Router } from 'express'
+import multer from 'multer'
 import type { Client } from '../../db/client.js'
 import { crearMiddlewareAuth } from './middleware/auth.js'
-import { validarIngesta } from '../services/ingesta.js'
+import { validarIngesta, ESQUEMA_BASE_INGESTA } from '../services/ingesta.js'
 import { VALORES_DEFECTO } from '../services/puntos.js'
+import type { ClienteIA } from '../ai/openrouter.js'
+import { PROMPT_MAESTRO_INGESTA } from '../ai/prompts.js'
 import { crearDocumento, crearSeccion } from '../models/secciones.js'
 import {
   crearSala,
@@ -22,7 +25,7 @@ import {
 //   del prompt maestro; si no cumple NO se persiste nada (FR-007/008).
 // - GET /mias, POST /unirse, GET /:id, PATCH /:id/config (solo admin).
 
-export function crearRouterSalas(db: Client, jwtSecret: string): Router {
+export function crearRouterSalas(db: Client, jwtSecret: string, clienteIA: ClienteIA): Router {
   const router = Router()
 
   // Todas las rutas de salas requieren cuenta autenticada (FR-004)
@@ -83,6 +86,7 @@ export function crearRouterSalas(db: Client, jwtSecret: string): Router {
       res.status(400).json({ error: validacion.error })
       return
     }
+
 
     // Configuración opcional del admin (null = calcular por sección después)
     const lectura = enteroPositivoONull(cuerpo.config_tiempo_lectura)
@@ -274,6 +278,129 @@ export function crearRouterSalas(db: Client, jwtSecret: string): Router {
     res.status(200).json({ sala: await obtenerSala(db, sala.id) })
   })
 
+  // ─── POST /api/salas/dump-desde-word (feature 003, FR-201..204) ─────────
+  // Crea una sala dump a partir de un documento Word: extrae el texto con
+  // mammoth, genera la ingesta con la IA (prompt maestro congelado) y la
+  // valida contra el esquema congelado ANTES de crear nada.
+  const subidaWord = multer({
+    storage: multer.memoryStorage(),
+    limits: { fileSize: 10 * 1024 * 1024 }
+  })
+
+  router.post('/dump-desde-word', subidaWord.single('archivo'), async function (req, res) {
+    const cuentaId = req.cuentaId as string
+    const archivo = req.file
+    if (archivo === undefined) {
+      res.status(400).json({ error: 'falta el archivo del documento (campo `archivo`)' })
+      return
+    }
+    const nombre = archivo.originalname.toLowerCase()
+    if (!nombre.endsWith('.docx') && !nombre.endsWith('.txt')) {
+      res.status(400).json({ error: 'el archivo debe ser .docx o .txt' })
+      return
+    }
+
+    // Extraer texto del documento
+    let textoDocumento = ''
+    try {
+      if (nombre.endsWith('.txt')) {
+        textoDocumento = archivo.buffer.toString('utf8')
+      } else {
+        const mammoth = await import('mammoth')
+        const extraido = await mammoth.extractRawText({ buffer: archivo.buffer })
+        textoDocumento = extraido.value
+      }
+    } catch {
+      res.status(400).json({ error: 'el documento no se pudo leer (¿es un .docx válido?)' })
+      return
+    }
+    if (textoDocumento.trim().length < 50) {
+      res.status(400).json({ error: 'el documento está vacío o es demasiado corto para generar una ingesta' })
+      return
+    }
+
+    // Generar la ingesta con la IA y validar el esquema congelado
+    let calificacionIA
+    try {
+      calificacionIA = await clienteIA.llamar(
+        ESQUEMA_BASE_INGESTA,
+        PROMPT_MAESTRO_INGESTA,
+        textoDocumento
+      )
+    } catch {
+      res.status(502).json({ error: 'la generación de la ingesta falló tras reintentos; verifica tu OPENROUTER_MODEL o usa la vía manual (pegar el JSON)' })
+      return
+    }
+
+    const validacion = validarIngesta(calificacionIA)
+    if (!validacion.ok) {
+      res.status(400).json({ error: 'la ingesta generada por la IA no cumple el esquema: ' + validacion.error })
+      return
+    }
+
+    // Configuración opcional (igual que la vía JSON)
+    const cuerpo = req.body ?? {}
+    const tamano = cuerpo.config_tamano_sesion_practica !== undefined
+      ? enteroPositivo(cuerpo.config_tamano_sesion_practica)
+      : 30
+    if (tamano === 'invalido') {
+      res.status(400).json({ error: 'config_tamano_sesion_practica debe ser un entero ≥ 1' })
+      return
+    }
+
+    // Creación idéntica a la vía JSON (documento + secciones + sala + membresía)
+    const documento = await crearDocumento(db, {
+      titulo: validacion.datos.documento.titulo,
+      jsonIngesta: JSON.stringify(calificacionIA),
+      cuentaCreadoraId: cuentaId
+    })
+    const seccionesOrdenadas = validacion.datos.documento.secciones.slice().sort(function (a, b) {
+      return a.orden - b.orden
+    })
+    const seccionesCreadas: Array<{ id: string; titulo: string; orden: number; num_palabras: number }> = []
+    for (const seccion of seccionesOrdenadas) {
+      const creada = await crearSeccion(db, {
+        documentoId: documento.id,
+        titulo: seccion.titulo,
+        orden: seccion.orden,
+        numPalabras: seccion.num_palabras,
+        contenido: JSON.stringify(seccion.contenido),
+        mapaConceptos: JSON.stringify(seccion.mapa_conceptos)
+      })
+      seccionesCreadas.push({ id: creada.id, titulo: creada.titulo, orden: creada.orden, num_palabras: creada.numPalabras })
+    }
+
+    let sala = null
+    for (let intento = 0; intento < 5 && sala === null; intento++) {
+      try {
+        sala = await crearSala(db, {
+          documentoId: documento.id,
+          administradorCuentaId: cuentaId,
+          modo: 'dump',
+          codigoInvitacion: generarCodigoInvitacion(),
+          configTiempoLectura: null,
+          configTiempoEscritura: null,
+          configTiempoResultados: null,
+          configTamanoSesionPractica: tamano,
+          configValoresPuntuacion: JSON.stringify(VALORES_DEFECTO)
+        })
+      } catch {
+        // colisión de código: reintenta
+      }
+    }
+    if (sala === null) {
+      res.status(500).json({ error: 'no se pudo generar un código de invitación único' })
+      return
+    }
+    await crearMembresia(db, cuentaId, sala.id)
+
+    res.status(201).json({
+      sala: sala,
+      documento: { id: documento.id, titulo: documento.titulo },
+      secciones: seccionesCreadas
+    })
+  })
+
   // ─── PATCH /api/salas/:id/cerrar (solo host, FR-117) ────────────────────
   router.patch('/:id/cerrar', async function (req, res) {
     const sala = await obtenerSala(db, req.params.id)
@@ -292,6 +419,12 @@ export function crearRouterSalas(db: Client, jwtSecret: string): Router {
     }
     await cerrarSala(db, sala.id)
     res.status(200).json({ sala: await obtenerSala(db, sala.id) })
+  })
+
+  // Middleware de error: cualquier excepción no capturada en los handlers
+  // (Express 5 propaga los rechazos async aquí) responde SIEMPRE JSON
+  router.use(function (error: unknown, _req: unknown, res: express.Response, _next: unknown): void {
+    res.status(500).json({ error: 'error interno: ' + (error instanceof Error ? error.message : String(error)) })
   })
 
   return router

@@ -1,4 +1,4 @@
-import { apiFetch, escapar } from '../main'
+import { apiFetch, escapar, obtenerToken } from '../main'
 
 // Vistas de salas (T021): listar mis salas, crear sala subiendo el JSON de
 // ingesta, y unirse con el código de invitación (fuente §6.1, US2).
@@ -15,9 +15,9 @@ interface SalaResumen {
 }
 
 interface RespuestaCrearSala {
-  sala: { id: string; codigoInvitacion: string }
-  documento: { id: string; titulo: string }
-  secciones: Array<{ id: string; titulo: string; orden: number; num_palabras: number }>
+  sala: { id: string; codigoInvitacion: string; modo: 'dump' | 'multijugador' }
+  documento?: { id: string; titulo: string }
+  secciones?: Array<{ id: string; titulo: string; orden: number; num_palabras: number }>
 }
 
 export function renderListaSalas(contenedor: HTMLElement, _irASalas: () => void): void {
@@ -75,13 +75,7 @@ export function renderCrearSala(contenedor: HTMLElement, irASalas: () => void): 
   contenedor.innerHTML = [
     '<h1>Crear sala</h1>',
     '<div class="pasos">',
-    '<p><strong>¿Cómo se genera el JSON?</strong> (el Word NO se sube aquí)</p>',
-    '<ol>',
-    '<li>Abre un chat de IA (Claude, ChatGPT…) que acepte archivos.</li>',
-    '<li>Adjunta tu <strong>documento Word</strong> (solo texto y tablas).</li>',
-    '<li>Pega el <strong>prompt maestro de ingesta</strong> tal cual y envíalo.</li>',
-    '<li>Copia la respuesta (el JSON) y cárgala aquí con el botón de archivo o pegándola en el cuadro.</li>',
-    '</ol>',
+    '<p><strong>Dump:</strong> sube tu documento Word y el sistema crea el contenido automáticamente, o usa el JSON si ya lo generaste fuera del sistema.</p>',
     '</div>',
     '<form id="forma-crear">',
     '<fieldset><legend>Modo de la sala</legend>',
@@ -89,8 +83,18 @@ export function renderCrearSala(contenedor: HTMLElement, irASalas: () => void): 
     '<label><input type="radio" name="modo" value="multijugador" /> Anki multijugador (cada quien importa su banco)</label>',
     '</fieldset>',
     '<div id="zona-dump">',
+    '<fieldset><legend>¿Cómo quieres crear el contenido de estudio?</legend>',
+    '<label><input type="radio" name="via_ingesta" value="word" checked /> <strong>Adjuntar mi documento Word</strong> — el sistema crea el contenido automáticamente con IA</label>',
+    '<label><input type="radio" name="via_ingesta" value="json" /> Ya tengo el JSON de ingesta (creado fuera del sistema) — sin gasto de IA</label>',
+    '</fieldset>',
+    '<div id="via-word">',
+    '<label>Documento Word (.docx) <input type="file" id="cargar-word" accept=".docx,.txt" /></label>',
+    '<p class="nota">Sube tu Word (solo texto y tablas, sin imágenes). El sistema lo segmenta y crea los conceptos automáticamente. Para documentos muy extensos usa la vía JSON.</p>',
+    '</div>',
+    '<div id="via-json" style="display:none">',
     '<label>Archivo JSON de ingesta (opcional) <input type="file" id="cargar-json" accept=".json,.txt,.md" /></label>',
     '<label>…o pega el JSON aquí<br /><textarea name="json" rows="10" cols="70" placeholder="{ &quot;documento&quot;: { … } }"></textarea></label>',
+    '</div>',
     '<fieldset><legend>Configuración opcional (vacío = calcular por sección)</legend>',
     '<label>Tiempo de lectura (min) <input type="number" name="lectura" min="1" /></label>',
     '<label>Tiempo de escritura (min) <input type="number" name="escritura" min="1" /></label>',
@@ -113,12 +117,23 @@ export function renderCrearSala(contenedor: HTMLElement, irASalas: () => void): 
     const multijugador = (forma.querySelector('input[name="modo"]:checked') as HTMLInputElement).value === 'multijugador'
     const zona = document.getElementById('zona-dump') as HTMLElement
     zona.style.display = multijugador ? 'none' : 'block'
-    areaJson.required = !multijugador
+    areaJson.required = false
   }
   forma.querySelectorAll('input[name="modo"]').forEach(function (radio) {
     radio.addEventListener('change', alternarModo)
   })
+
+  // Vía de ingesta dentro del modo dump: Word (automático) o JSON (manual)
+  function alternarVia(): void {
+    const via = (forma.querySelector('input[name="via_ingesta"]:checked') as HTMLInputElement).value
+    ;(document.getElementById('via-word') as HTMLElement).style.display = via === 'word' ? 'block' : 'none'
+    ;(document.getElementById('via-json') as HTMLElement).style.display = via === 'json' ? 'block' : 'none'
+  }
+  forma.querySelectorAll('input[name="via_ingesta"]').forEach(function (radio) {
+    radio.addEventListener('change', alternarVia)
+  })
   alternarModo()
+  alternarVia()
 
   // Cargar el archivo JSON y volcarlo (limpio) al cuadro de texto
   document.getElementById('cargar-json')?.addEventListener('change', function (evento) {
@@ -131,17 +146,69 @@ export function renderCrearSala(contenedor: HTMLElement, irASalas: () => void): 
     lector.readAsText(archivo)
   })
 
-  forma.addEventListener('submit', function (evento) {
+  function mostrarSalaCreada(respuesta: RespuestaCrearSala): void {
+    const esMultijugador = respuesta.sala.modo === 'multijugador'
+    const secciones = (respuesta.secciones ?? [])
+      .map(function (s) {
+        return '<li>' + escapar(s.titulo) + ' (' + String(s.num_palabras) + ' palabras)</li>'
+      })
+      .join('')
+    resultado.innerHTML = [
+      '<h2>Sala creada</h2>',
+      '<p>Comparte este código de invitación con tu grupo:</p>',
+      '<p class="codigo"><code>' + escapar(respuesta.sala.codigoInvitacion) + '</code></p>',
+      esMultijugador
+        ? '<p>Modo: <strong>Anki multijugador</strong>. Cada participante importa su banco al unirse.</p>'
+        : '<p>Documento: <strong>' + escapar(respuesta.documento?.titulo ?? '') + '</strong></p><ul>' + secciones + '</ul>',
+      '<p><a href="#/sala/' + respuesta.sala.id + '">Ir a la sala</a> · <a href="#/salas">Volver a mis salas</a></p>'
+    ].join('')
+  }
+
+  forma.addEventListener('submit', async function (evento) {
     evento.preventDefault()
     error.hidden = true
     const datos = new FormData(forma)
+    const esMultijugador = String(datos.get('modo')) === 'multijugador'
 
-    // Limpieza tolerante + chequeo local de que sea JSON parseable (solo
-    // modo dump); la validación ESTRICTA del esquema la hace el backend
+    // ─── Vía A (modo dump): subir el Word → ingesta automática con IA ────
+    if (!esMultijugador && String(datos.get('via_ingesta')) === 'word') {
+      const archivoWord = (document.getElementById('cargar-word') as HTMLInputElement).files?.[0]
+      if (archivoWord === undefined) {
+        error.hidden = false
+        error.textContent = 'Adjunta tu documento Word (.docx) o cambia a la vía "Ya tengo el JSON".'
+        return
+      }
+      const cuerpo = new FormData()
+      cuerpo.append('archivo', archivoWord)
+      const tamano = String(datos.get('tamano'))
+      if (tamano !== '') cuerpo.append('config_tamano_sesion_practica', tamano)
+      const boton = forma.querySelector('button[type="submit"]') as HTMLButtonElement
+      boton.disabled = true
+      error.hidden = false
+      error.textContent = 'Generando la ingesta con IA… esto puede tardar un minuto en documentos largos.'
+      fetch('/api/salas/dump-desde-word', { method: 'POST', headers: { Authorization: 'Bearer ' + (obtenerToken() ?? '') }, body: cuerpo })
+        .then(async function (r) {
+          const respuesta = await r.json()
+          if (!r.ok) throw new Error(respuesta.error ?? 'Error ' + String(r.status))
+          mostrarSalaCreada(respuesta)
+          error.hidden = true
+        })
+        .catch(function (e: Error) {
+          error.textContent = e.message
+        })
+        .finally(function () {
+          boton.disabled = false
+        })
+      return
+    }
+
+    // ─── Vía B (modo dump): JSON adjuntado o pegado ───────────────────────
     let jsonIngesta: unknown = undefined
-    if (String(datos.get('modo')) !== 'multijugador') {
+    if (!esMultijugador) {
+      const archivoJson = (document.getElementById('cargar-json') as HTMLInputElement).files?.[0]
+      const texto = archivoJson !== undefined ? await archivoJson.text() : String(datos.get('json'))
       try {
-        jsonIngesta = JSON.parse(limpiarRespuestaIA(String(datos.get('json'))))
+        jsonIngesta = JSON.parse(limpiarRespuestaIA(texto))
       } catch {
         error.hidden = false
         error.textContent = 'El contenido no es JSON válido. Debe ser la respuesta JSON del prompt maestro de ingesta (no el documento Word).'
@@ -153,7 +220,7 @@ export function renderCrearSala(contenedor: HTMLElement, irASalas: () => void): 
     const tamano = String(datos.get('tamano'))
     if (tamano !== '') cuerpo.config_tamano_sesion_practica = Number(tamano)
 
-    if (String(datos.get('modo')) === 'multijugador') {
+    if (esMultijugador) {
       cuerpo.modo = 'multijugador'
     } else {
       cuerpo.modo = 'dump'
@@ -168,19 +235,7 @@ export function renderCrearSala(contenedor: HTMLElement, irASalas: () => void): 
 
     apiFetch<RespuestaCrearSala>('/api/salas', { method: 'POST', body: JSON.stringify(cuerpo) })
       .then(function (respuesta) {
-        const secciones = respuesta.secciones
-          .map(function (s) {
-            return '<li>' + escapar(s.titulo) + ' (' + String(s.num_palabras) + ' palabras)</li>'
-          })
-          .join('')
-        resultado.innerHTML = [
-          '<h2>Sala creada</h2>',
-          '<p>Comparte este código de invitación con tu grupo:</p>',
-          '<p class="codigo"><code>' + escapar(respuesta.sala.codigoInvitacion) + '</code></p>',
-          '<p>Documento: <strong>' + escapar(respuesta.documento.titulo) + '</strong></p>',
-          '<ul>' + secciones + '</ul>',
-          '<p><a href="#/salas">Volver a mis salas</a></p>'
-        ].join('')
+        mostrarSalaCreada(respuesta)
         void irASalas
       })
       .catch(function (e: Error) {
